@@ -1,0 +1,1332 @@
+---
+title: "Define activity thresholds"
+author: Anne Aulsebrook
+output: 
+  rmdformats::robobook:
+  code_folding: hide
+  toc_depth: 2
+---
+
+# Background
+
+*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (2024) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
+
+*Repository*: https://github.com/aaulsebrook/
+
+*Purpose* This notebook is used to define activity thresholds for pectoral sandpipers. We recorded accelerometry from wild male pectoral sandpipers using miniature data loggers. The goal is to define whether an individual is "resting" or "active" at any given time, based on accelerometry values.  
+
+*Inputs* This notebook uses the datafile "labelled-acc-data.csv". 
+
+To obtain these data, male pectoral sandpipers fitted with accelerometers were video recorded using handheld cameras. Behaviours in videos were labelled using BORIS v 8.20.4. Behaviour labels were tidied (script: tidy-video-labels.R), synchronised with raw accelerometry (scripts: targeted-time-calibration.RmD; extract-labelled-acc.R), and summarised into either 1- or 10-minute windows, with mean overall dynamic body acceleration (ODBA) and the majority behaviour calculated for each window (script: window-labelled-odba.R). These additional processing scripts are available upon request. These methods are also described in Aulsebrook, Jacques-Hamilton and Kempenaers (2024) (https://doi.org/10.1016/j.anbehav.2023.10.013) and the scripts accompanying that manuscript are found here: https://github.com/rowanjh/behav-acc-ml
+
+*Summary* We were able to observe and record the behaviour of some individuals, but not others. We also expected some differences in accelerometry values between individuals (e.g. due to variation in how tightly the data logger was attached). We therefore decided to use an individual-based approach for defining activity thresholds. Our methods had two stages:
+
+1. Method development and ground truthing: Define and evaluate methods using accelerometry data and behavioural observations from a set of focal males.
+
+2. Application and visual assessment: Using the method developing in Stage 1, determine activity thresholds for all individuals. Visually confirm that the threshold for each individual fits the data distribution as expected, and make adjustments where necessary.
+
+*Outputs* Plots are saved in "outputs/activity-threshold-plots". Thresholds appended to accelerometry data are saved in "outputs/processed-data".
+
+# Import data and prepare workspace
+
+```{r Set up, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+options(digits=2,scipen=10)
+```
+
+Most packages that are used in this Notebook can be installed using the install.packages function. One exception is "accr" which was developed by researchers at MPIO and needs to be installed from github.
+
+```{r}
+library(remotes)
+remotes::install_github("mpio-be/accr") # used for some odba threshold functions
+```
+
+
+```{r Prepare workspace, message=FALSE, results=FALSE}
+library(dplyr) # for data manipulation
+library(ggplot2) # for plotting
+library(data.table) # for faster reading and writing
+library(flextable) # makes nice tables
+library(accr)
+library(here)
+library(glue)
+library(tidyr)
+library(gridExtra) # for combining plots
+library(grid)
+library(stringr)
+library(tibble)
+library(DistributionOptimization)
+library(doFuture)
+library(purrr)
+
+source(here("scripts", "general-helper-functions.R"))
+
+set_flextable_defaults(
+  font.size = 10,
+  theme_fun = theme_vanilla,
+  font.family = "Helvetica",
+  padding = 6,
+  background.color = "white")
+
+window_length = 10 # 1 or 10 (in minutes)
+data_type = "onboard" # rawbased or onboard
+
+path_output = here("outputs", "activity-threshold-outputs")
+
+if (!dir.exists(path_output)) {
+  dir.create(path_output)
+}
+```
+
+```{r Import data}
+labelled_acc <- read.csv(here("data","labelled-acc-data.csv"))
+```
+
+# Stage 1: Method development and ground-truthing
+
+In this stage, I am using 1) raw accelerometry matched to behaviour, for ground-truthing, and 2) druid ODBA data to define the activity thresholds.
+
+I have defined "active" windows as windows where males spent more than 60% of their time walking or flying. "Rest" windows are where males spent more than 60% of their time standing or sitting without moving their body.
+
+```{r Define behavioural threshold for activity and rest}
+maj_threshold=0.6
+```
+
+
+"Preen" is also being included in the "rest" category, because 1) there is little to no body movement, 2) preening was interspersed within periods of rest, 3) increased preening during rest usually had little to no effect on mean ODBA (explored in a preliminary analysis in a separate script), although there were some exceptions, and 4) the distinction between preening and resting was highly subjective (bouts of preening were often less than a second). 
+
+The other possible behaviour categories were "other" and "unknown"; these behaviours are excluded from further analysis.
+
+Based on our observations of the video, I have analysed the average bout length of rest and activity. In this analysis, I have ignored behaviours that last less than 3 seconds.
+
+## Do windows represent overall time budgets?
+
+Before proceeding further, I wanted to check whether behaviour summarised into windows actually give a reasonable representation of overall time budgets. We know that sleep in pectoral sandpipers can be very brief (4 seconds), so are we losing too much information by summarising behaviour into minutes or tens of minutes?
+
+Below, I have calculated % time active from observations in two ways:
+1. Percentage time active: percentage of total time when the bird was active
+2. Percentage windows active: percentage of windows where the bird was majority active
+
+Each window will only be assigned one majority behaviour, even if there are multiple behaviours contained in the window. I am only including windows where the majority behaviour accounts for `r maj_threshold*100`% of the window.
+
+In the plot below, I am only including males with more than 10 minutes of labelled data.
+
+```{r Import and format labelled odba windows}
+labelled_acc <- labelled_acc %>%
+  mutate(prop_rest=beh_rest+beh_preen,
+         prop_active = beh_fly+beh_walk,
+         active=case_when(prop_rest>maj_threshold ~ "rest",
+                          prop_active>maj_threshold ~ "active",
+                          TRUE ~ NA),
+         majority_beh=case_when(beh_rest + beh_preen > maj_threshold ~ "rest",
+                                beh_fly>maj_threshold ~ "fly",
+                                beh_walk>maj_threshold ~ "walk",
+                                TRUE ~ NA)) 
+```
+
+```{r Refine dataset}
+#' Exclude cases where a particular window is over- or under-sampled
+#' This occurs if there are major clock shifts during that period, or if
+#' the logger has stopped storing new data.
+labelled_acc <- labelled_acc %>%
+  filter(n_raw_acc_datapoints <= expected_n+(expected_n/100*20) & n_raw_acc_datapoints >= (expected_n/100*20))
+```
+
+```{r Summarise time and windows active}
+active_summary <- labelled_acc %>%
+  filter(!is.na(active)) %>%
+  group_by(colour_combo) %>%
+  summarise(n = n(),
+            total_known_windows = sum(active=="rest", na.rm=T) + sum(active=="active", na.rm=T),
+            perc_active_windows = sum(active=="active", na.rm=T)/total_known_windows*100,
+            perc_active_overall = sum(prop_active, na.rm=T)/
+              (n()-sum(beh_unknown, na.rm=T)+sum(beh_other, na.rm=T))*100) %>%
+  filter(n > 1)
+
+active_summary %>%
+  arrange(perc_active_overall) %>%
+  select(colour_combo, n, perc_active_windows, perc_active_overall) %>%
+  flextable()
+```
+
+```{r Calculate correlation and plot}
+cor <- cor.test(active_summary$perc_active_overall, 
+         active_summary$perc_active_windows, 
+         method="spearman")
+
+cor_p <- if_else(cor$p.value<0.001, "p < 0.001",
+                 if_else(cor$p.value<0.01, "p < 0.01",
+                         glue('p = {round(cor$p.value,2)}')))
+
+ggplot(active_summary) +
+  geom_point(aes(x=perc_active_overall, y=perc_active_windows)) +
+  theme_classic() +
+  xlab("\n% time active (total observed)") +
+  ylab("% windows active \n") +
+  ggtitle(label=paste("Spearman correlation coefficient:", 
+               round(cor$estimate, 2), ", ",
+               cor_p))+
+  geom_abline(slope=1, intercept=0, colour="grey", linetype=2)
+```
+
+These windows seem to offer a reasonable estimate of how much time birds spend active during observations (relative to each other), with some margin of error. So if we can classify these windows reliably as active or resting, we should at the very least be able to distinguish between high, moderate and low levels of activity.
+
+```{r Remove nas}
+labelled_acc <- labelled_acc %>%
+  filter(!is.na(active) & !is.na(mean_ODBA))
+```
+
+## Check outliers
+
+It's possible to make mistakes when labelling the video, or when matching observations to accelerometry. Checking outliers can help identify these mistakes.
+
+```{r Plot all data}
+ggplot(labelled_acc) +
+  geom_boxplot(aes(x=active,y=mean_ODBA,fill=colour_combo)) +
+  scale_fill_viridis_d(option="H") +
+  theme_classic() +
+  xlab("\nMajority behaviour")+
+  ylab("Mean ODBA\n")
+```
+
+ODBA associated with rest and activity generally looks reasonable.
+
+```{r Summarise rest outliers}
+wins_rest <- labelled_acc %>% 
+  filter(active=="rest")
+
+wins_active <- labelled_acc %>% 
+  filter(active=="active")
+
+quantiles <- labelled_acc %>%
+  filter(!is.na(active)) %>%
+  group_by(active) %>%
+  reframe(quantile = scales::percent(c(0.05, 0.95)),
+            mean_ODBA = quantile(mean_ODBA, c(0.05, 0.95), na.rm=T)) %>%
+  pivot_wider(names_from=quantile, values_from=mean_ODBA) %>%
+  pivot_wider(names_from=active, values_from=c(`5%`,`95%`))
+
+check_rest <- wins_rest %>%
+  filter(mean_ODBA > quantiles$`95%_rest`) %>%
+  mutate(check_type="rest")
+
+check_rest %>%
+  select(colour_combo, active, mean_ODBA, beh_fly, beh_walk, beh_rest, beh_preen, beh_unknown, beh_other) %>%
+  arrange(desc(mean_ODBA)) %>%
+  flextable()
+```
+
+Our greatest outliers for rest also include a decent amount of flying, so this is not surprising.
+
+```{r Summarise active outliers}
+check_active <- wins_active %>%
+  filter(mean_ODBA < quantiles$`5%_active`) %>%
+  mutate(check_type="active")
+
+check_active %>%
+  select(colour_combo, active, mean_ODBA, beh_fly, beh_walk, beh_rest, beh_preen, beh_unknown, beh_other) %>%
+  arrange(mean_ODBA) %>%
+  flextable()
+```
+
+Our lowest outlier for activity is where the bird was only moving around on the ground. So again, this is not so surprising. 
+
+A side note: Median ODBA is probably better than mean ODBA for estimating majority behaviour (less skew from very high/low values). But since Druid provided on-board processing of mean values, and around half the raw data was not transmitted properly, we are focusing on means.
+
+## Plot labelled data
+
+The plots below shows the distribution of mean ODBA values for different behaviours.
+
+```{r Hist mean ODBA of rest vs active - overall}
+ggplot(data=labelled_acc %>% filter(!is.na(active)),
+       aes(fill=active, x=mean_ODBA)) +
+  geom_histogram(binwidth=0.02) +
+  theme_classic() +
+  labs(x="\nMean ODBA", y="Count\n", fill="") +
+  scale_x_continuous(n.breaks=10) +
+  scale_fill_viridis_d(option="viridis", begin=0, end=0.7)
+```
+
+From the plot above, I would expect a threshold for activity to be between 0.25 and 0.35. It kind of looks like there might be a low ODBA peak, followed by another peak (or two), and that our separation between rest and activity should fall somewhere in that second peak.
+
+## Define focal males
+
+Ideally, it would be useful to be see how a method performs for different individuals. Using 10-minute windows is tricky, though, because we don't have so many 10-min windows of data available for each individual. There are lots of males with labelled video <30 minutes, and many don't have a good balance of resting vs. active windows.
+
+```{r Define focal males}
+focal_males <- labelled_acc %>% 
+  group_by(colour_combo, tag_ID) %>%
+  summarise(n_active=sum(active=="active",na.rm=T),
+            n_rest=sum(active=="rest",na.rm=T),
+            n_total=n_active+n_rest) %>%
+  mutate(tag_ID=tolower(tag_ID)) %>%
+  arrange(desc(n_active), desc(n_rest)) %>%
+  filter(n_total>1)
+
+focal_males %>% flextable()
+```
+
+There are a few ways to resolve this problem:
+
+1. Look at overall accuracy, without grouping by individual
+2. Check whether there are more data available from the Druid data for these videos (as opposed to the raw data): <i> there aren't </i>
+
+So we go with option 1.
+
+```{r Subset to focal data - only include males with >1 windows}
+focal_wins <- labelled_acc %>%
+  filter(colour_combo %in% focal_males$colour_combo) %>%
+  filter(!is.na(active))
+
+focal_wins %>%
+  summarise(n_active=sum(active=="active"),
+            n_rest=sum(active=="rest")) %>%
+  flextable()
+```
+
+## Compare different methods for defining activity thresholds
+
+We are defining activity thresholds separately for each individual bird, based on the distribution of their ODBA values.
+
+In a separate series of scripts, I have 'cleaned' the 10-min Druid ODBA data (clean-druid-odba-data.R) to exclude duplicates, overlapping windows, specific birds (1 hour recording and bird that died), and times when the tag was not on the bird.
+
+The method we are using to fit distributions to the data is DistributionOptimization. This approach was recently published in Scientific Reports (Lerch et al. 2020; https://doi.org/10.1038/s41598-020-57432-w). It uses an evolutionary algorithm to fit Gaussian mixture models. It is somewhat more complex and slower to run than methods like MixFit, but it sometimes performs better than MixFit (particularly for odd or unusual cases).
+
+```{r Import full data for threshold determination}
+odba <- fread(here("outputs","processed-data",
+                      glue("mean_ODBA_{window_length}min-intervals_{data_type}.csv")))
+```
+
+```{r Define functions for determining distributions and thresholds}
+.cutoff <- function(MU1, MU2, S1, S2, R) {
+
+  fun <- function(cutoff, mu1, mu2, sigma1, sigma2) {
+    separation <- abs(
+      pnorm(cutoff, mean = mu1, sd = sigma1) - pnorm(cutoff, mean = mu2, sd = sigma2)
+    )
+    
+    return(-separation)
+  }
+
+  optimise(
+    f        = fun,
+    interval = R,
+    mu1      = MU1,
+    mu2      = MU2,
+    sigma1   = S1,
+    sigma2   = S2
+  )$minimum
+
+}
+
+get_separations <- function(x, 
+                            log_transform_odba = TRUE, 
+                            method = "distop", 
+                            ncomp = 4, 
+                            family_type = "normal", 
+                            n_bins=100,
+                            seed_number=1) {
+  
+  stopifnot(inherits(x, "ODBA"))
+
+  odba = attr(x, "odba")
+  
+  set.seed(seed_number)
+  
+  if(log_transform_odba==TRUE) {
+    assign(".V", x[, ..odba][[1]] |> log(), .GlobalEnv)
+  } else {
+    assign(".V", x[, ..odba][[1]], .GlobalEnv)
+  }
+  
+  # set up output table
+  out = data.frame(thr_number=1:(ncomp-1), value=rep(NA, ncomp-1))
+
+  if (method == "mixfit") {
+    mm = mixR::mixfit(get(".V", .GlobalEnv), ncomp = ncomp, family = family_type)
+    
+    for(k in 1:(ncomp-1)){
+      thr_value = .cutoff(mm$mu[k], mm$mu[k+1], mm$sd[k], mm$sd[k+1], R = range(.V))
+      if(log_transform_odba==TRUE) {
+        thr_value = thr_value |> exp()
+      }
+      out$value[k] = thr_value
+    }
+    
+    return(list(mm_fit = mm,
+                thresh = out))
+  }
+  
+  if (method == "distopt") {
+    
+    do = DistributionOptimization(get(".V", .GlobalEnv), Modes=ncomp, NoBins = n_bins, Monitor=0, Seed = seed_number)
+    
+    for(k in 1:(ncomp-1)){
+      thr_value = .cutoff(do$Means[k], do$Means[k+1], do$SDs[k], do$SDs[k+1], R = range(.V)) |>
+      exp()
+      out$value[k] = thr_value
+    }
+    
+    return(list(do_fit = do,
+                thresh = out))
+  }
+}
+```
+
+I originally expected there to be 2 or 3 distributions or modes in the data (the third potentially corresponding to flying). But then I noticed that models were sometimes separating the first "rest" peak into two clusters. So I have tried between 2 and 4 modes.
+
+Data are log-transformed, then fitted with normal distributions. I also tried using untransformed data and setting 'lnorm' as the family type, but performance was worse (results not shown).
+
+I also tried using MixFit, but DistOpt performed better in some cases, so stuck with DistOpt.However, note that DistOpt can be slow to run.
+
+```{r Determine thresholds using all methods, message=FALSE}
+# Automatically uses up to 10 cores
+n_workers = min(10, parallelly::availableCores())
+
+future::plan(multisession, workers = n_workers)
+
+results <- foreach(i = 1:nrow(focal_males), 
+                   .options.future = list(
+                     globals = structure(TRUE,
+                                         add = c("path_fulldat","window_length")),
+                                         seed = TRUE)) %dofuture% {
+      this_tag_id = focal_males$tag_ID[i]
+      colour_combo = focal_males$colour_combo[i]
+      dat <- odba %>%
+        filter(tag_ID==this_tag_id)
+      
+      setODBA(dat, "window_end_utc", "mean_ODBA")
+    
+      d2_results = get_separations(dat, method="distopt", ncomp=2, family_type=family_type)
+      d3_results = get_separations(dat, method="distopt", ncomp=3, family_type=family_type)
+      d4_results = get_separations(dat, method="distopt", ncomp=4, family_type=family_type)
+
+      print(paste0(colour_combo," complete"))
+      
+      data.frame(colour_combo = colour_combo,
+                     d2_thr1 = d2_results$thresh$value[1],
+                     d3_thr1 = d3_results$thresh$value[1],
+                     d3_thr2 = d3_results$thresh$value[2],
+                     d4_thr1 = d4_results$thresh$value[1],
+                     d4_thr2 = d4_results$thresh$value[2],
+                     d4_thr3 = d4_results$thresh$value[3]
+                 )
+}
+
+plan(sequential)
+```
+
+```{r Combine and format results}
+threshold_results <- bind_rows(results)
+```
+
+Below, I've used each of the possible separation points between modes to define each window of data as "active" or "rest". Then I've compared these predictions with the observed majority behaviour for that window. If these are the same, this is a true positive (TP). Accuracy is defined as TP / total number of windows * 100 (for each individual).
+
+```{r Combine results with windowed data}
+win_thresholds <- left_join(focal_wins, 
+                     threshold_results, 
+                     by='colour_combo',
+                     relationship="many-to-one")
+
+win_active_thresholds <- win_thresholds %>%
+  pivot_longer(cols=contains(c("1","2","3","4")),
+               names_to="threshold_type",
+               values_to="threshold_value") %>%
+  mutate(predicted_active=if_else(mean_ODBA>threshold_value, "active", "rest"),
+         true_positive=if_else(predicted_active==active,1,0),
+         method_type=substr(threshold_type,1,2))
+```
+
+```{r Determine accuracy}
+threshold_accuracy <- win_active_thresholds %>%
+  group_by(threshold_type) %>%
+  summarise(n_windows=n(),
+            accuracy=sum(true_positive==1)/n_windows*100,
+            precision_active=sum(true_positive==1 & active=="active")/
+              (sum(true_positive==1 & active=="active") +
+                 sum(true_positive==0 & active=="rest")),
+            recall_active=sum(true_positive==1 & active=="active")/
+              (sum(true_positive==1 & active=="active") +
+                 sum(true_positive==0 & active=="active")),
+            f_meas_active=(2*precision_active*recall_active)/
+              (precision_active+recall_active))
+
+threshold_accuracy %>% 
+  mutate(threshold_method=case_when(substr(threshold_type,1,1)=="m" ~ "MixFit transformed data",
+                                    substr(threshold_type,1,1)=="d" ~ "Distribution Optimization",
+                                    substr(threshold_type,1,1)=="l" ~ "MixFit Lnorm"),
+         n_modes=substr(threshold_type,2,2),
+         threshold_number=substr(threshold_type, 7,7)) %>%
+  relocate(threshold_method:threshold_number, .before = accuracy) %>%
+  relocate(n_windows, .after=threshold_number) %>%
+  select(!threshold_type) %>%
+  arrange(desc(accuracy))
+```
+
+By far the best method appears to use the second of 3 modes. This makes sense to me - the model tends to divide "rest" into two modes, and then the separation between the second and third mode is our activity threshold. Higher recall than precision indicates that we will probably tend to slightly underestimate activity using this method, although we 
+
+## Visualise thresholds
+
+The plots below visualise how the best threshold method relates to the data distribution for each bird.
+
+```{r}
+plot_threshold <- function(dat, threshold) {
+  dist_plot <- ggplot(dat) +
+    geom_histogram(aes(x=mean_ODBA), binwidth=0.02, fill="gray") +
+    geom_vline(xintercept = threshold, lwd=1, lty=2) +
+    theme_classic() +
+    coord_cartesian(xlim=c(0.001,2)) +
+    xlab("\nMean ODBA") +
+    ylab("Count\n")
+  return(dist_plot)
+}
+
+plot_all_separations <- function(dat, separations) {
+    dist_plot <- ggplot(dat) +
+    geom_histogram(aes(x=mean_ODBA), binwidth=0.02, fill="gray") +
+    geom_vline(xintercept = c(separations$thresh$value), lwd=1, lty=2) +
+    annotate("text", x=c(separations$thresh$value), y=10, 
+             label= c(separations$thresh$thr_number),
+             colour="blue")+
+    theme_classic() +
+    coord_cartesian(xlim=c(0.001,2)) +
+    xlab("\nMean ODBA") +
+    ylab("Count\n")
+  return(dist_plot)
+}
+```
+
+```{r Select best threshold}
+thresh_method <- "d3_thr2"
+```
+
+```{r}
+thresholds <- threshold_results %>%
+  select(colour_combo, glue('{thresh_method}')) %>%
+  left_join(., focal_males, by='colour_combo') %>%
+  rename(activity_threshold=glue('{thresh_method}'))
+
+if (!dir.exists(glue("{path_output}/plots"))) {
+  dir.create(glue("{path_output}/plots"))
+}
+  
+for(i in 1:nrow(thresholds)) {
+  this_colour_combo = thresholds$colour_combo[i]
+  this_tag_id = thresholds$tag_ID[i]
+  this_threshold = thresholds$activity_threshold[i]
+  
+  dat <- odba %>%
+        filter(tag_ID==this_tag_id)
+  n_windows = nrow(dat)
+  
+  if(n_windows<30*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+    
+  dist_plot <- plot_threshold(dat, this_threshold) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours; ",
+                     "threshold = ", round(this_threshold,3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+  ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+     
+  print(dist_plot)
+          
+  print(paste0("i = ", i, " complete;",
+                 " threshold = ", round(this_threshold, 2),
+                 " (colour combo = ", this_colour_combo, ")"))
+  rm(dist_plot)
+}
+```
+
+Visually, thresholds using 3 modes and the 2nd threshold appear reasonably sensible. Most often, the threshold falls at or just below the second peak (which also fits what we saw in the overall distribution). The average threshold is 299, which again is right in the centre of the expected range (250-350), although some thresholds are in the range of 200-250. 
+
+## Visualise thresholds against observations
+
+```{r Plot behaviour and activity threshold for each bird, fig.width=5, fig.height=3}
+best_threshold_obs <- win_active_thresholds %>% filter(threshold_type=="d3_thr2")
+best_threshold_obs$active <- as.factor(best_threshold_obs$active)
+best_threshold_obs$majority_beh <- as.factor(best_threshold_obs$majority_beh)
+best_thresholds = threshold_accuracy %>% filter(threshold_type=="d3_thr2")
+
+for(i in 1:nrow(thresholds)) {
+  this_colour_combo = thresholds$colour_combo[i]
+  this_threshold = thresholds$activity_threshold[i]
+  obs = best_threshold_obs %>% filter(colour_combo==this_colour_combo)
+  
+  active_plot <- ggplot(data=obs,
+                 aes(fill=active, x=mean_ODBA)) +
+    geom_histogram(binwidth=0.02) +
+    theme_classic() +
+    labs(x="\nMean ODBA", y="Count\n", fill="") +
+    scale_fill_viridis_d(option="viridis", drop=FALSE) +
+    scale_x_continuous(expand=c(0,0), breaks=seq(0,1.1,by=0.1))+
+    geom_vline(xintercept=this_threshold, colour="darkred") +
+    coord_cartesian(xlim=c(0.0,1.1)) +
+    ggtitle(label=this_colour_combo) 
+             #subtitle=paste0("Overall accuracy = ", accuracy, "% ; n = ", nrow(obs)))
+  
+    print(active_plot)
+}
+```
+
+This is tricky with the data we have - working with 10-min intervals is tough in this context - but the method generally appears somewhat reasonable (accuracy > 80%).
+
+# Stage 2: Application and visual assessment
+
+## Initial application and assessment
+
+In general, it is difficult or impossible to determine an activity threshold for birds with less than six hours of data. Birds with less than six hours of data are being excluded.
+
+```{r Refine functions for activity thresholds}
+plot_all_thresholds <- function(dat, thresholds) {
+    dist_plot <- ggplot(dat) +
+    geom_histogram(aes(x=mean_ODBA), binwidth=0.02, fill="gray") +
+    geom_vline(xintercept = c(thresholds$value), lwd=1, lty=2) +
+    annotate("text", x=c(thresholds$value), y=10, 
+             label= c(thresholds$thr_number),
+             colour="blue")+
+    theme_classic() +
+    coord_cartesian(xlim=c(0.001,2)) +
+    xlab("\nMean ODBA") +
+    ylab("Count\n")
+  return(dist_plot)
+}
+
+plot_all_separations <- function(dat, separations) {
+    dist_plot <- ggplot(dat) +
+    geom_histogram(aes(x=mean_ODBA), binwidth=0.02, fill="gray") +
+    geom_vline(xintercept = c(separations$thresh$value), lwd=1, lty=2) +
+    annotate("text", x=c(separations$thresh$value), y=10, 
+             label= c(separations$thresh$thr_number),
+             colour="blue")+
+    theme_classic() +
+    coord_cartesian(xlim=c(0.001,2)) +
+    xlab("\nMean ODBA") +
+    ylab("Count\n")
+  return(dist_plot)
+}
+```
+
+```{r Set up table for activity thresholds}
+thresholds <- odba %>%
+  group_by(colour_combo) %>%
+  summarise(tag_ID=first(tag_ID),
+            bird_ID=first(bird_ID),
+            n_windows=n())
+
+thresholds <- thresholds %>%
+  filter(n_windows>6*60/window_length) # filter to birds with at least 6 hours of data
+```
+
+```{r Get thresholds for each recording}
+n_workers = min(20, parallelly::availableCores())
+future::plan(multisession, workers = n_workers)
+
+results <- foreach(i = 1:nrow(thresholds),
+                   .options.future = list(
+                     globals = structure(TRUE,
+                                         add = c("path_fulldat","window_length")),
+                                         seed = TRUE)) %dofuture% {
+    this_tag_id = thresholds$tag_ID[i]
+    n_windows = thresholds$n_windows[i]
+    
+    if(n_windows<6*60/window_length) {
+      print(paste0("i = ", i, " not completed; insufficient data (<6 hours)"))
+      
+    } else {
+    
+      dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+      setODBA(dat, "start_dt_utc", "mean_ODBA")
+      separations = get_separations(dat, method="distopt", ncomp=3)
+      threshold_values = separations$thresh %>%
+        mutate(tag_ID=this_tag_id,
+               filename=this_file,
+               n_windows=n_windows,
+               .before=1) 
+      fit = cbind(data.frame(tag_ID=this_tag_id,
+                             weights=separations$do_fit$Weights,
+                             sds=separations$do_fit$SDs,
+                             means=separations$do_fit$Means,
+                             n_windows=n_windows)) |>
+         rownames_to_column(var="x")
+      list(threshold_values=threshold_values,
+           fit=fit)
+    }
+  }
+
+plan(sequential)
+```
+
+```{r Combine all results}
+separation_number = 2
+
+all_thresholds = bind_rows(map(results, 1)) 
+fits = bind_rows(map(results,2))
+thresholds = all_thresholds %>%
+  filter(thr_number==separation_number) %>%
+  rename(separation_used=thr_number,
+         activity_threshold=value) %>%
+  arrange(tag_ID)
+```
+
+```{r Plot thresholds}
+for(i in 1:nrow(thresholds)) {
+    
+    this_tag_id = thresholds$tag_ID[i]
+    this_file = thresholds$filename[i]
+    these_thresholds = all_thresholds |>
+      filter(tag_ID==this_tag_id)
+    n_windows = thresholds$n_windows[i]
+    
+    if(nrow(these_thresholds)==0) {
+      print(glue("Insufficient data for tag {this_tag_id}"))
+    } else {
+      
+    dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+    if(n_windows<34*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+  
+    
+    dist_plot <- plot_all_thresholds(dat, these_thresholds) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours",
+                     "; threshold = ", 
+                     round(these_thresholds$value[separation_number],3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+     ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+     
+     print(dist_plot)
+    }
+}
+```
+
+Any thresholds that appear very unusual for the distribution (i.e. are far above or below the second peak), or that appear slightly unusual and are not within the expected range (250-350), are being re-attempted. These are:
+
+* Tag 020a (184, low but just before second peak)?
+* Tag 021a (one of the focal birds, but threshold appears a little low)
+* Tag 022b (212, low but just before second peak)
+* Tag 025b (166 but just before second peak)
+* Tag 025e (256, maybe a little low)
+* Tag 026c: Threshold much too high. Try different seed?
+* Tag 0214 (147, just below second peak)
+* Tag 0220: (450) Threshold appears too high; either use first or try a different seed
+* Tag 0244: Threshold too high (439)
+* Tag 0246: Threshold too high. 
+* Tag 0248 (197, appears low-ish)
+* Tag 0254: Threshold too low
+* Tag 0265 (191, low but just before second peak)
+* Tag 0267: Threshold too high
+* Tag 0269 (151, low but just before second peak)
+
+Appears to be too little data for:
+
+* Tag 022a (20 hours)
+* Tag 0226 (12 hours)
+* Tag 023f (15 hours)
+* Tag 0222 (24 hours)
+* Tag 0232 (33 hours; value ok but just below second peak)
+* Tag 0261 (33 hours)
+
+## Revise thresholds by changing seed number
+
+In general, it seems like we tend to have issues when we have less than 36 hours (1.5 days) of data from an individual. These individuals will probably need to be excluded (n=15 out of 100).
+
+```{r Add comment}
+thresholds <- thresholds %>%
+  mutate(threshold_comment = case_when(n_windows<36*(60/window_length) ~ "limited data; <36 hours",
+                                       tag_ID=="0252" ~ "exclude this bird", # bird died
+                                       TRUE ~ NA))
+```
+
+```{r List tags to revise}
+tags_to_revise <- c('020a',
+                    '021a',
+                    '022b',
+                    '025b',
+                    '025e',
+                    '026c',
+                    '0214',
+                    '0220',
+                    '0244',
+                    '0246',
+                    '0248',
+                    '0254',
+                    '0265',
+                    '0267',
+                    '0269')
+
+thresholds_to_revise <- thresholds %>%
+  filter(tag_ID %in% tags_to_revise)
+```
+
+```{r Try different seed number}
+n_workers = min(length(tags_to_revise), parallelly::availableCores())
+future::plan(multisession, workers = n_workers)
+
+revised_results <- foreach(i = 1:nrow(thresholds_to_revise),
+                   .options.future = list(
+                     globals = structure(TRUE,
+                                         add = c("path_fulldat","window_length")),
+                                         seed = TRUE)) %dofuture% {
+    this_tag_id = thresholds_to_revise$tag_ID[i]
+    n_windows = thresholds_to_revise$n_windows[i]
+    
+    if(n_windows<6*60/window_length) {
+      print(paste0("i = ", i, " not completed; insufficient data (<6 hours)"))
+      
+    } else {
+    
+      dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+      setODBA(dat, "start_dt_utc", "mean_ODBA")
+      separations = get_separations(dat, method="distopt", ncomp=3, seed_number = 21)
+      threshold_values = separations$thresh %>%
+        mutate(tag_ID=this_tag_id,
+               filename=this_file,
+               n_windows=n_windows,
+               .before=1) 
+      fit = cbind(data.frame(tag_ID=this_tag_id,
+                             weights=separations$do_fit$Weights,
+                             sds=separations$do_fit$SDs,
+                             means=separations$do_fit$Means,
+                             n_windows=n_windows)) |>
+         rownames_to_column(var="x")
+      list(threshold_values=threshold_values,
+           fit=fit)
+    }
+  }
+
+plan(sequential)
+```
+
+```{r Combine and plot revised thresholds}
+separation_number = 2
+
+all_revised_thresholds = bind_rows(map(revised_results, 1)) 
+fits = bind_rows(map(revised_results,2))
+revised_thresholds = all_revised_thresholds %>%
+  filter(thr_number==separation_number) %>%
+  rename(separation_used=thr_number,
+         activity_threshold=value) %>%
+  arrange(tag_ID)
+
+for(i in 1:nrow(revised_thresholds)) {
+    
+    this_tag_id = revised_thresholds$tag_ID[i]
+    this_file = revised_thresholds$filename[i]
+    these_thresholds = all_revised_thresholds |>
+      filter(tag_ID==this_tag_id)
+    n_windows = revised_thresholds$n_windows[i]
+    
+    if(nrow(these_thresholds)==0) {
+      print(glue("Insufficient data for tag {this_tag_id}"))
+    } else {
+      
+    dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+    if(n_windows<34*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+  
+    
+    dist_plot <- plot_all_thresholds(dat, these_thresholds) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours",
+                     "; threshold = ", 
+                     round(these_thresholds$value[separation_number],3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+     ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+
+     print(dist_plot)
+    }
+}
+```
+
+Tags with thresholds that now look ok / consistent enough to keep:
+
+* Tag 020a (184, low but just before second peak) - slightly improved
+* Tag 021a (one of the focal birds) - improved
+* Tag 025b (166 but just before second peak) - improved
+* Tag 025e (256, maybe a little low) - slightly improved but very similar
+* Tag 026c: Now looks good
+* Tag 0248 (197, appears low-ish) - improved, looks good (277)
+* Tag 0265 (191, low but just before second peak) - improved, looks good
+* Tag 0269 (151, low but just before second peak) - improved, looks ok enough
+
+```{r Alter thresholds}
+revised_thresholds <- revised_thresholds %>%
+  filter(tag_ID %in% c("020a","021a","025b","025e","026c","0248","0265","0269")) %>%
+  mutate(threshold_comment = glue("revised threshold by changing seed number from 1 to 21"))
+
+thresholds[match(revised_thresholds$tag_ID, thresholds$tag_ID), ] <- revised_thresholds
+```
+
+```{r Save plots for revised thresholds}
+for(i in 1:nrow(revised_thresholds)) {
+    
+    this_tag_id = revised_thresholds$tag_ID[i]
+    this_file = revised_thresholds$filename[i]
+    these_thresholds = all_revised_thresholds |>
+      filter(tag_ID==this_tag_id)
+    n_windows = revised_thresholds$n_windows[i]
+    
+    if(nrow(these_thresholds)==0) {
+      print(glue("Insufficient data for tag {this_tag_id}"))
+    } else {
+      
+    dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+    if(n_windows<34*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+  
+    
+    dist_plot <- plot_all_thresholds(dat, these_thresholds) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours",
+                     "; threshold = ", 
+                     round(these_thresholds$value[separation_number],3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+     ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+    }
+}
+```
+
+Tags that still need revising:
+
+* Tag 0214 (147, just below second peak) - same
+* Tag 0220: (450) Still too high
+* Tag 022b (212, low but just before second peak) - same
+* Tag 0244: Threshold too high (439)
+* Tag 0246: Threshold too high. 
+* Tag 0254: Threshold too low - now looks too high?
+* Tag 0267: Threshold too high
+
+## Revise thresholds by changing seed number (take two)
+
+```{r List tags still to revise}
+tags_to_revise <- c('0214',
+                    '0220',
+                    '022b',
+                    '0244',
+                    '0246',
+                    '0254',
+                    '0267')
+
+thresholds_to_revise <- thresholds %>%
+  filter(tag_ID %in% tags_to_revise)
+```
+
+```{r Try another seed number}
+n_workers = min(length(tags_to_revise), parallelly::availableCores())
+future::plan(multisession, workers = n_workers)
+
+revised_results <- foreach(i = 1:nrow(thresholds_to_revise),
+                   .options.future = list(
+                     globals = structure(TRUE,
+                                         add = c("path_fulldat","window_length")),
+                                         seed = TRUE)) %dofuture% {
+    this_tag_id = thresholds_to_revise$tag_ID[i]
+    n_windows = thresholds_to_revise$n_windows[i]
+    
+    if(n_windows<6*60/window_length) {
+      print(paste0("i = ", i, " not completed; insufficient data (<6 hours)"))
+      
+    } else {
+    
+      dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+      setODBA(dat, "start_dt_utc", "mean_ODBA")
+      separations = get_separations(dat, method="distopt", ncomp=3, seed_number = 41)
+      threshold_values = separations$thresh %>%
+        mutate(tag_ID=this_tag_id,
+               filename=this_file,
+               n_windows=n_windows,
+               .before=1) 
+      fit = cbind(data.frame(tag_ID=this_tag_id,
+                             weights=separations$do_fit$Weights,
+                             sds=separations$do_fit$SDs,
+                             means=separations$do_fit$Means,
+                             n_windows=n_windows)) |>
+         rownames_to_column(var="x")
+      list(threshold_values=threshold_values,
+           fit=fit)
+    }
+  }
+
+plan(sequential)
+```
+
+```{r Combine and plot revised thresholds again}
+separation_number = 2
+
+all_revised_thresholds = bind_rows(map(revised_results, 1)) 
+fits = bind_rows(map(revised_results,2))
+revised_thresholds = all_revised_thresholds %>%
+  filter(thr_number==separation_number) %>%
+  rename(separation_used=thr_number,
+         activity_threshold=value) %>%
+  arrange(tag_ID)
+
+for(i in 1:nrow(revised_thresholds)) {
+    
+    this_tag_id = revised_thresholds$tag_ID[i]
+    this_file = revised_thresholds$filename[i]
+    these_thresholds = all_revised_thresholds |>
+      filter(tag_ID==this_tag_id)
+    n_windows = revised_thresholds$n_windows[i]
+    
+    if(nrow(these_thresholds)==0) {
+      print(glue("Insufficient data for tag {this_tag_id}"))
+    } else {
+      
+    dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+    if(n_windows<34*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+  
+    
+    dist_plot <- plot_all_thresholds(dat, these_thresholds) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours",
+                     "; threshold = ", 
+                     round(these_thresholds$value[separation_number],3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+     ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+     
+     print(dist_plot)
+    }
+}
+```
+
+Tags with thresholds that are now good:
+
+* Tag 0244: Threshold too high (439) - worse, even higher - improved, looks good (196)
+* Tag 0246: Threshold still too high (was 476, now 414) - improved, looks ok (297)
+* Tag 0254: Threshold too low, then too high - looks great now (221)
+
+```{r Alter thresholds from third seed number}
+revised_thresholds <- revised_thresholds %>%
+  filter(tag_ID %in% c("0236","0244","0246","0250","0254")) %>%
+  mutate(threshold_comment = glue("revised threshold by changing seed number from 1 to 41"))
+
+thresholds[match(revised_thresholds$tag_ID, thresholds$tag_ID), ] <- revised_thresholds
+```
+
+```{r Save plots for new revised thresholds}
+for(i in 1:nrow(revised_thresholds)) {
+    
+    this_tag_id = revised_thresholds$tag_ID[i]
+    this_file = revised_thresholds$filename[i]
+    these_thresholds = all_revised_thresholds |>
+      filter(tag_ID==this_tag_id)
+    n_windows = revised_thresholds$n_windows[i]
+    
+    if(nrow(these_thresholds)==0) {
+      print(glue("Insufficient data for tag {this_tag_id}"))
+    } else {
+      
+    dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+    if(n_windows<34*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+  
+    
+    dist_plot <- plot_all_thresholds(dat, these_thresholds) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours",
+                     "; threshold = ", 
+                     round(these_thresholds$value[separation_number],3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+     ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+    }
+}
+```
+
+## Revise thresholds using other methods
+
+Tags with other thresholds that we can use:
+
+* Tag 0214 (147, just below second peak) - much the same; keep original (no action needed)
+
+Tags for other methods:
+
+* Tag 0220: (450) - too high still. Might work better to use four modes for this one: lots of high values (i.e. flying)
+* Tag 022b (212, low but just before second peak) - Might work better to use four modes for this one (i.e. flying)
+* Tag 0267: Threshold too high - still too high (371) Might work better to use four modes for this one (i.e. flying)
+
+```{r List tags to revise with 4 modes}
+tags_to_revise <- c('0220',
+                    '022b',
+                    '0267')
+
+thresholds_to_revise <- thresholds %>%
+  filter(tag_ID %in% tags_to_revise)
+```
+
+```{r Try using four modes}
+n_workers = min(length(tags_to_revise), parallelly::availableCores())
+future::plan(multisession, workers = n_workers)
+
+revised_results <- foreach(i = 1:nrow(thresholds_to_revise),
+                   .options.future = list(
+                     globals = structure(TRUE,
+                                         add = c("path_fulldat","window_length")),
+                                         seed = TRUE)) %dofuture% {
+    this_tag_id = thresholds_to_revise$tag_ID[i]
+    n_windows = thresholds_to_revise$n_windows[i]
+    
+    if(n_windows<6*60/window_length) {
+      print(paste0("i = ", i, " not completed; insufficient data (<6 hours)"))
+      
+    } else {
+    
+      dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+      setODBA(dat, "start_dt_utc", "mean_ODBA")
+      separations = get_separations(dat, method="distopt", ncomp=4, seed_number = 41)
+      threshold_values = separations$thresh %>%
+        mutate(tag_ID=this_tag_id,
+               filename=this_file,
+               n_windows=n_windows,
+               .before=1) 
+      fit = cbind(data.frame(tag_ID=this_tag_id,
+                             weights=separations$do_fit$Weights,
+                             sds=separations$do_fit$SDs,
+                             means=separations$do_fit$Means,
+                             n_windows=n_windows)) |>
+         rownames_to_column(var="x")
+      list(threshold_values=threshold_values,
+           fit=fit)
+    }
+  }
+
+plan(sequential)
+```
+
+```{r Combine and plot revised thresholds with 4 modes}
+separation_number = 2
+
+all_revised_thresholds = bind_rows(map(revised_results, 1)) 
+fits = bind_rows(map(revised_results,2))
+revised_thresholds = all_revised_thresholds %>%
+  filter(thr_number==separation_number) %>%
+  rename(separation_used=thr_number,
+         activity_threshold=value) %>%
+  arrange(tag_ID)
+
+for(i in 1:nrow(revised_thresholds)) {
+    
+    this_tag_id = revised_thresholds$tag_ID[i]
+    this_file = revised_thresholds$filename[i]
+    these_thresholds = all_revised_thresholds |>
+      filter(tag_ID==this_tag_id)
+    n_windows = revised_thresholds$n_windows[i]
+    
+    if(nrow(these_thresholds)==0) {
+      print(glue("Insufficient data for tag {this_tag_id}"))
+    } else {
+      
+    dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+    if(n_windows<34*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+  
+    
+    dist_plot <- plot_all_thresholds(dat, these_thresholds) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours",
+                     "; threshold = ", 
+                     round(these_thresholds$value[separation_number],3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+     ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+     
+     print(dist_plot)
+    }
+}
+```
+
+These thresholds (second separation point) look much better.
+
+```{r Alter thresholds from 4 modes}
+revised_thresholds <- revised_thresholds %>%
+  filter(tag_ID %in% c("0220","022b","0267")) %>%
+  mutate(threshold_comment = glue("revised threshold by using 4 modes instead of 3"))
+
+thresholds[match(revised_thresholds$tag_ID, thresholds$tag_ID), ] <- revised_thresholds
+```
+
+```{r Save plots for new revised thresholds with 4 modes}
+for(i in 1:nrow(revised_thresholds)) {
+    
+    this_tag_id = revised_thresholds$tag_ID[i]
+    this_file = revised_thresholds$filename[i]
+    these_thresholds = all_revised_thresholds |>
+      filter(tag_ID==this_tag_id)
+    n_windows = revised_thresholds$n_windows[i]
+    
+    if(nrow(these_thresholds)==0) {
+      print(glue("Insufficient data for tag {this_tag_id}"))
+    } else {
+      
+    dat <- odba %>%
+          filter(tag_ID==this_tag_id)
+    
+    if(n_windows<34*60/window_length) {
+      title_colour="darkred"
+    } else {
+      title_colour="darkgreen"
+    }
+  
+    
+    dist_plot <- plot_all_thresholds(dat, these_thresholds) + 
+      ggtitle(paste0("Tag ID = ", this_tag_id, 
+                     "; n = ", round(window_length*n_windows/60, 0), " hours",
+                     "; threshold = ", 
+                     round(these_thresholds$value[separation_number],3)))+
+      theme(plot.title = element_text(color = title_colour))
+          
+     ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
+            plot=dist_plot,
+            path=here(path_output,"plots"),
+            device="png",
+            width=18,
+            height=11,
+            units="cm")
+    }
+}
+```
+
+## Summarise and save thresholds
+
+```{r Summarise thresholds}
+thresholds %>% 
+  arrange(desc(activity_threshold)) %>%
+  select(tag_ID, activity_threshold, n_windows, threshold_comment) %>%
+  filter(n_windows>36*60/window_length) %>%
+  flextable()
+```
+
+## Re-assess accuracy for focal birds
+
+```{r Combine revised results with windowed data}
+focal_wins <- focal_wins %>%
+  mutate(tag_ID=tolower(tag_ID))
+
+win_thresholds <- left_join(focal_wins, 
+                     thresholds, 
+                     by='tag_ID',
+                     relationship="many-to-one") %>%
+  filter(!is.na(activity_threshold)) %>%
+  mutate(predicted_active=if_else(mean_ODBA>activity_threshold, "active", "rest"),
+         true_positive=if_else(predicted_active==active,1,0))
+```
+
+```{r Determine revised accuracy}
+threshold_accuracy <- win_thresholds %>%
+  summarise(n_windows=n(),
+            accuracy=sum(true_positive==1)/n_windows*100,
+            precision_active=sum(true_positive==1 & active=="active")/
+              (sum(true_positive==1 & active=="active") +
+                 sum(true_positive==0 & active=="rest")),
+            recall_active=sum(true_positive==1 & active=="active")/
+              (sum(true_positive==1 & active=="active") +
+                 sum(true_positive==0 & active=="active")),
+            f_meas_active=(2*precision_active*recall_active)/
+              (precision_active+recall_active))
+
+threshold_accuracy %>% 
+  arrange(desc(accuracy))%>% 
+  flextable()
+```
+
+```{r Save data with thresholds}
+odba_thresholds <- full_join(odba, thresholds, join_by('tag_ID')) %>%
+  mutate(active=case_when(mean_ODBA>activity_threshold ~ "active",
+                          TRUE ~ "inactive")) %>%
+  rename(n_windows_threshold = n_windows)
+
+write.csv(odba_thresholds,
+          file=here(path_output, glue("ODBA-and-activity_{window_length}min-intervals_onboard.csv")),
+          row.names=FALSE)
+```

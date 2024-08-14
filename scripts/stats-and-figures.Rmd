@@ -1,0 +1,2250 @@
+---
+title: 'Activity in Pectoral Sandpipers: Statistics and figures'
+author: Anne Aulsebrook
+output: 
+  rmdformats::robobook:
+    code_folding: hide
+    toc_depth: 2
+---
+
+# Background
+
+*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (2024) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
+
+*Repository*: https://github.com/aaulsebrook/
+
+*Purpose*: This notebook is used to perform statistical analyses and create tables/figures that are included in the manuscript.
+
+*Outputs*: Tables and figures are saved in "outputs/figures-and-tables"
+
+*Inputs*: Data inputs are found in "data" and "outputs/processed-data". Data processing steps are outlined below.
+
+## Notes on data processing steps
+
+Prior to performing the analyses below, steps for cleaning and preparing the data are performed in separate scripts:
+
+1. clean-onboard-odba-data.R: Cleans data processed on board the Druid accelerometer. 
+2. define-activity-thresholds.Rmd: Determines activity thresholds for each individual
+3. map-male-and-nest-locations.Rmd: Identifies when males took trips outside the study area
+
+These processing scripts are found in the "scripts" folder. The key outputs are also stored in "outputs/processed-data". 
+
+# Import data and prepare workspace
+
+```{r Setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+options(digits=3, digit.secs=2, scipen=10)
+```
+
+Most packages that are used in this Notebook can be installed using the install.packages function. One exception is "wadeR" which was developed by researchers at MPIO and needs to be installed from github.
+
+```{r Install wadeR package}
+# library(remotes)
+# remotes::install_github("mpio-be/wadeR") # Utqiagvik (Barrow) mapping
+```
+
+```{r Load packages, message=FALSE, results=FALSE}
+library(tidyr) # for reshaping datasets
+library(dplyr) # for other data manipulation
+library(ggplot2) # for plotting
+library(scales) # for plotting dates
+library(lubridate) # for working with dates and times
+library(ggalt) # for dumbbell charts
+library(data.table) # for fast table reading and rolling functions
+library(flextable) # generates neat tables
+library(officer) # formatting flextable for Microsoft Word
+library(egg) # useful for combining plots (ggarrange)
+library(ggrepel) # for nicely spaced labels on plots
+library(fasttime) # for faster conversions to posixct
+library(wadeR)
+library(randomcoloR)
+library(ggsci)
+library(stringr) # count matches in string
+library(here) # for easier directory navigation
+library(glue)
+library(dichromat) # for checking colours in figures
+library(viridis)
+library(emmeans)
+library(effects)
+library(glmmTMB) # for glmm with beta error distribution
+library(geosphere) # for distances lat lon
+library(lme4)
+library(spatialrisk) # for distances lat lon
+library(patchwork)
+library(DHARMa)
+library(sf)
+library(future)
+library(broom.mixed) # for converting glmmtmb to flextable
+```
+
+Some functions are used in multiple scripts and are therefore stored in their own script for easier access (general-helper-functions.R). This helper script needs to be loaded for the analyses below to run.
+
+```{r Import general helper functions}
+source("./general-helper-functions.R")
+```
+
+Male activity was recorded using miniature accelerometers and received in two different ways: processed on board the device ("onboard" data) or stored in raw form ("rawbased" data). During the course of the study, we also considered different methods for processing the data. These included summarising the data at either 1-min or 10-min intervals, and either defining activity thresholds for each individual separately ("individual" thresholds) or together ("global" thresholds).
+
+There are advantages and disadvantages of different approaches, but results presented in the main text of the manuscript are based on the "onboard" data with a window-length of 10 minutes and "individual" thresholds. 
+
+In the supplementary material of the manuscript, we present a comparison of these different approaches. By changing the definitions in the code chunk below, and running the appropriate pre-processing steps, analyses in this R Notebook can be performed using datasets processed in different ways. These alternative datasets and pre-processing scripts are available upon request. 
+
+```{r Define activity data for analyses}
+window_length = 10 # 1 or 10
+data_type = "onboard" # rawbased or onboard
+threshold_type = "individual" # global or individual
+
+if(!(window_length==1 | window_length==10)){
+  print("Error: Select a window length of either 1 or 10")
+}
+
+if(!(data_type=="onboard" | data_type=="rawbased")){
+  print("Error: Select a data_type of either 'onboard' or 'rawbased'")
+}
+
+if(!(threshold_type=="individual" | threshold_type=="global")){
+  print("Error: Select a threshold type of either 'individual' or 'global'")
+}
+
+if(threshold_type=="global" & window_length!=10){
+  print("Warning: We recommend using a window length of 10 when using the global threshold. The global threshold was developed using data summarised at 10-minute intervals.")
+}
+
+if(threshold_type=="global" & data_type!="onboard"){
+  print("Warning: We recommend using the 'onboard' data when applying the global threshold. The global threshold was developed using onboard processed on board the device.")
+}
+
+if(window_length=="1" & data_type!="onboard"){
+  print("Error: Onboard data is only available with a window length of 10 minutes.")
+}
+
+if(threshold_type == "global") {
+  global_threshold = 0.27 # this threshold is derived from a separate analysis that is available upon request
+}
+```
+
+```{r Import data}
+captures <- read.csv(here("data","capture-data.csv"))
+nests <- read.csv(here("data","nest-data.csv"))
+sightings <- read.csv(here("data", "sighting-data.csv"))
+parentage <- read.csv(here("data", "parentage-data.csv"))
+gps <- read.csv(here("data","gps-data.csv"))
+
+activity_onboard <- read.csv(here("outputs", "processed-data",
+                 glue("activity_odba_10min-intervals-onboard.csv")))
+  # this dataset is used to help determine final data transmission
+
+activity <- read.csv(here("outputs", "processed-data",
+                 glue("activity_odba_{window_length}min-intervals-{data_type}.csv")))
+  # this dataset is the source of ODBA and activity data for analyses
+
+male_trips_offsite <- read.csv(here("outputs", "processed-data", "male-trips-offsite.csv"))
+```
+
+All dates and times are local Alaskan times, unless specified otherwise. 
+
+```{r Format dates and times in datasets}
+captures <- captures %>%
+  mutate(date=local_date_to_posix(as.character(date)),
+         released_dt = local_dt_to_posix(paste(date,released)))
+
+nests <- nests %>%
+  mutate(date_found=local_date_to_posix(as.character(date_found)),
+         est_hatch_date=local_date_to_posix(as.character(est_hatch_date)),
+         hatch_date=local_date_to_posix(as.character(hatch_date)))
+
+sightings <- sightings %>%
+  mutate(datetime=local_dt_to_posix(as.character(datetime)))
+
+gps <- gps %>%
+  mutate(datetime=local_dt_to_posix(as.character(datetime)))
+
+activity_onboard <- activity_onboard %>%
+  mutate(window_end_utc=acc_to_posix(as.character(window_end_utc)),
+         window_end_localtime=dt_to_local(window_end_utc))
+
+activity <- activity %>%
+  mutate(window_end_utc=acc_to_posix(as.character(window_end_utc)),
+         window_end_localtime=dt_to_local(window_end_utc))
+
+male_trips_offsite <- male_trips_offsite %>%
+  mutate(start_dt_local=local_dt_to_posix(as.character(start_dt_local)),
+         end_dt_local=local_dt_to_posix(as.character(end_dt_local)))
+```
+
+To avoid biases that might arise from incomplete data, we use a minimum threshold for data availability for some analyses. Specifically, we have defined a minimum number of hours of data that need to be available per individual per day ("min_acc_hrs_per_day") and a minimum number of days of data that need to be available per individual ("min_acc_days"). Data that do not meet these requirements (i.e. insufficient data available from an individual on a particular day, or insufficient data available from a particular individual overall) are excluded from some analyses. By default, we have required at least 85% complete data per individual per day, and at least 2 days of data from each individual. 
+
+```{r Define acc data thresholds}
+min_acc_hrs_per_day = 20.4 # 20.4 means at least 85% complete
+min_acc_days = 2 # except where otherwise specified
+```
+
+```{r Set colour and plot defaults}
+male_colour = "darkgreen"
+female_colour = "gray32" 
+success_colour = "#2267E7"  #"#20EAABFF"
+fail_colour = "#DF536B"
+default_shape = 21
+uncertain_shape = 4
+
+legend.heading.size = 10
+axis.heading.size = 10
+label.size = 10
+font.family = "Calibri"
+small.point.size = 1
+
+# ribbon plot specifications
+point_size = small.point.size+1
+point_alpha = 0.5
+col_scale <- c("springgreen4", "darkgray")
+extra_nest_shape = 13
+
+windowsFonts("Calibri" = windowsFont("Calibri")) # avoids font issues
+```
+
+```{r Set table format, message=FALSE, results=FALSE}
+set_flextable_defaults(
+  font.size = 11,
+  theme_fun = theme_booktabs,
+  font.family = "Calibri",
+  padding = 3,
+  background.color = "white")
+
+sect_properties <- prop_section(
+  page_size = page_size(orient = "portrait",
+                        width = 21 * 0.393701,
+                        height =29.7  * 0.393701),
+  type = "continuous",
+  page_margins = page_mar(bottom = 2.54 * 0.393701,
+                          top = 2.54 * 0.393701,
+                          left = 2.54 * 0.393701,
+                          right = 2.54 * 0.393701)
+)
+```
+
+```{r Set and create output paths}
+save_plots = TRUE
+save_tables = TRUE
+output_path <- here('outputs','figures-and-tables')
+
+if (!dir.exists(output_path)) {
+  dir.create(output_path)
+}
+```
+
+# Preparing data for analysis
+
+*Note*: The tables and figures in this section are for context and data-checking only. They are not included in the manuscript. 
+
+## Identify tagged males
+
+```{r Extract tagged males from capture data, message=FALSE, results=FALSE}
+tagged_males <- captures %>%
+  filter(tag_action=="on") %>% 
+  filter(!colour_combo %in% colour_combos_to_exclude) %>%
+  select(colour_combo, bird_ID, tag_ID, date, released_dt, body_mass)
+```
+
+```{r Tag deployment, fig.height=3.5, fig.width=6}
+ggplot(tagged_males, aes(x=date))+
+  theme_classic()+
+  geom_bar(stat="count",
+           fill=male_colour) +
+  scale_x_datetime(breaks=date_breaks(width="1 day"),
+               date_labels="%d",
+               expand = c(0, 0)) +
+  coord_cartesian(xlim=c(local_date_to_posix("2022-06-06"),
+                         local_date_to_posix("2022-06-28")))+
+  xlab("\n Date (June)")+
+  ylab("Number of new tags deployed on males\n")
+```
+
+In 2022, we equipped 100 adult male pectoral sandpipers with 3.7 g accelerometer tags (weight includes harness and glue) with GPS function (Debut NANO, Druid Inc.) between `r min(tagged_males$date)` and `r max(tagged_males$date)`. We targeted males who were exhibiting territorial behaviours. We stopped tagging males when we ran out of tags (although new males were still entering the study site).
+
+The weight of the device was between approximately `r round(3.7/max(tagged_males$body_mass)*100, 1)` and `r round(3.7/min(tagged_males$body_mass)*100, 1)` % of the bird's body mass.
+
+## Determing female fertility
+
+We defined the fertile period of each female pectoral sandpiper as the interval beginning 5 days before the female began laying eggs (Kempenaers and Valcu 2017 <i> Nature</i>, https://doi.org/10.1038/nature20813) and ending the day the penultimate egg was laid. Clutch size ranged from 2 to 4 eggs (89.7% of nests contained 4 eggs, 6.9% contained 3 eggs, and 3.4% contained 2 eggs), meaning that the fertile period for each female ranged from 6-8 days. It is not actually known whether females still engage in copulations after initiating their clutch.
+
+If the nest was found during laying (clutch size when found < maximum clutch size), the beginning of the fertile period was defined as <i> date found - clutch size when found </i> (females lay one egg per day). 
+
+If the nest was complete when found, the beginning of the fertile period was defined as: <i> hatch date - the typical incubation period (22 days) - (maximum clutch size - 1) </i>. For hatch date, we used either the earliest actual hatch date if the eggs successfully hatched in the incubator, or the earliest predicted hatch date (based on the floatation method) if they did not.
+
+Our calculations assume that whenever the nest was found or checked, the female had not laid any eggs yet on that day.
+
+```{r Determine clutch initiation date and fertile period}
+nests$found_status <- if_else(
+  nests$first_clutchsize==nests$max_clutchsize, 
+  "complete",
+  "laying"
+)
+
+nests <- nests %>%
+  mutate(clutch_init = case_when(found_status=="laying" ~ date_found-first_clutchsize*(24*60*60),
+                                 is.na(hatch_date) ~ est_hatch_date - 22*(24*60*60) - (max_clutchsize-1)*(24*60*60),
+                                 TRUE ~ hatch_date - 22*(24*60*60) - (max_clutchsize-1)*(24*60*60)),
+         penult_egg = case_when(max_clutchsize>1 ~ clutch_init + (max_clutchsize-2)*(24*60*60),
+                                TRUE ~ clutch_init),
+         first_fertile_day=clutch_init-5*(24*60*60),
+         last_fertile_day = penult_egg)
+```
+
+For the overall study site, we defined the start of the fertile period as the 5% quantile of all fertile start dates, and the end as the 95% quantile. A similar approach was used to define the end of the fertile period in Lesku et al. 2012 <i> Science </i> (https://doi.org/10.1126/science.1220939. 
+
+After the start date is 'fertile', end date onwards is 'post-fertile'.
+
+```{r Determine fertile period}
+start_FertilePeriod <- floor_date(
+  quantile(nests$first_fertile_day, 0.05, na.rm=T),
+  unit="day")
+end_FertilePeriod <- floor_date(
+  quantile(nests$last_fertile_day, 0.95, na.rm=T),
+  unit="day")
+```
+
+```{r Plot number of fertile females, fig.height=3, fig.width=9}
+all_FertileDates <- seq(min(nests$first_fertile_day, na.rm=T), 
+                        by = "day", 
+                        length.out = max(nests$last_fertile_day, na.rm=T)-
+                          min(nests$first_fertile_day, na.rm=T))
+
+countFertileFemales <- function(date) {
+  count <- date>=nests$first_fertile_day &
+    date<=nests$last_fertile_day
+  sum <- sum(count, na.rm=TRUE)
+  return(sum)
+}
+
+ff_by_date <- data.frame(date=unlist(all_FertileDates))
+ff_by_date$n_FertileFemales <- sapply(all_FertileDates,
+                                      countFertileFemales)
+
+barplot_ff <- ggplot(ff_by_date, aes(x=date, 
+                                     y=n_FertileFemales)) +
+  theme_classic()+
+  annotate(geom="rect",
+           xmin=start_FertilePeriod-24*60*30,
+           xmax=end_FertilePeriod+24*60*30,
+           ymin=0,
+           ymax=43,
+           fill="grey",
+           alpha=0.3)+
+  geom_bar(stat="identity",
+           fill=female_colour) +
+  coord_cartesian(xlim=c(local_date_to_posix("2022-06-06"),
+                         local_date_to_posix("2022-07-02")))+
+  scale_y_continuous(limits=c(0,43), expand=c(0,0))+
+  xlab("\n Date") +
+  ylab("Number of fertile females\n")
+
+barplot_ff
+```
+
+## Summarise paternity data
+
+We collected blood samples from all of the males we tagged (as well as some that we didn't) and from eggs/chicks on our study plot. DNA was extracted from these samples by collaborators at the University of Alaska. These DNA samples were shipped to Seewiesen. Genotyping was performed by Sylvia and parentage was analysed by Bart. 
+
+```{r Match parentage and capture IDs}
+parentage <- left_join(parentage, captures[,c("bird_ID","colour_combo")], 
+                       by=join_by("ID.father"=="bird_ID")) %>%
+  mutate(ID.father=as.character(ID.father)) %>%
+  mutate(ID.father=replace_na(ID.father,"unbanded")) %>%
+  rename(LL.father=colour_combo) %>%
+  mutate(LL.father=replace_na(LL.father,"unbanded")) %>%
+  left_join(., captures[,c("bird_ID","colour_combo")], by=join_by("ID.mother"=="bird_ID")) %>%
+  rename(LL.mother=colour_combo)
+```
+
+```{r Summarise paternity results}
+fathers <- parentage %>%
+  group_by(ID.father, LL.father, Nest) %>%
+  summarise(n_eggs=n()) %>%
+  group_by(ID.father, LL.father) %>%
+  summarise(n_eggs=sum(n_eggs),
+            n_nests=n())
+
+fathers %>% flextable()
+```
+*(Table for background only; not to be included in paper)*
+
+```{r Summarise number of fathers per nest}
+parentage %>% 
+  group_by(Nest) %>% 
+  summarise(fathers=toString(unique(LL.father)),
+            unique_fathers=n_distinct(LL.father)) %>% 
+  filter(fathers!="NA" & fathers!="unbanded") %>%
+  arrange(desc(unique_fathers)) %>%
+  flextable()
+```
+
+
+## Exclude unreliable or irrelevant GPS data
+
+GPS data need to be filtered down to data collected while the device was on the bird.
+
+Occasionally, the devices recorded a latitude and longitude of 200. This is a default, error value that doesn't mean anything and should be excluded.
+
+```{r Filter and format gps data}
+male_gps <- gps %>%
+  left_join(., tagged_males, join_by('tag_ID')) %>%
+  filter(lat!=200 & lon!=200) %>% # these are nonsense values
+  filter(datetime>released_dt) %>%
+  mutate(local_date=floor_date(datetime, unit="days"),
+         bird_ID=as.factor(bird_ID)) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE) 
+```
+
+## Determining site tenure
+
+We are using capture date as a proxy for arrival date.
+
+We are using the latest of sighting, GPS and ODBA data as a proxy for departure.
+
+There are two birds who were "seen" after they last transmitted data. One of these was definitely a mistake; wrong GPS point must have been recorded, because the sighting is associated with a video file from 10 days earlier (14 June rather than 24 June). So for this bird (DG,DB,DG) I am using the last date of data transmission as his departure date.
+
+The other I have no reason to exclude, and the sighting was only 1 day after he last transmitted data.
+
+```{r Estimate departure date}
+latest_onboard = activity_onboard %>%
+  group_by(tag_ID) %>%
+  mutate(window_end_localtime_hour=floor_date(window_end_localtime, unit="hours")) %>%
+  summarise(last_ODBA = max(window_end_localtime, na.rm=T),
+            last_hour_n_ODBA = sum(window_end_localtime>=(last_ODBA-60*60), na.rm=T))
+
+latest_gps = male_gps %>%
+  group_by(tag_ID) %>%
+  summarise(last_GPS = max(datetime, na.rm=T),
+            last_hour_n_GPS = sum(datetime>=(last_GPS-60*60), na.rm=T))
+
+latest_sightings <- inner_join(sightings, tagged_males, by='colour_combo') %>%
+  group_by(tag_ID) %>%
+  summarise(last_sighting = max(datetime, na.rm=T),
+            last_hour_n_sightings = sum(datetime>=(last_sighting-60*60), na.rm=T))
+
+male_departures = left_join(tagged_males, latest_onboard, join_by("tag_ID")) %>%
+  left_join(., latest_gps, join_by("tag_ID")) %>%
+  left_join(., latest_sightings, join_by("tag_ID"))
+
+male_departures = male_departures %>%
+  mutate(last_data_akdt = pmax(last_ODBA,last_GPS,last_sighting, na.rm=T),
+         last_data_utc = dt_to_acc(last_data_akdt),
+         last_data_cet = with_tz(last_data_akdt, tz="CET"),
+         across(c(last_ODBA, last_GPS, last_sighting), 
+                ~case_when(. == last_data_akdt ~ cur_column()), .names = 'new_{col}')) %>%
+  unite(col=last_data_type, starts_with('new'), na.rm = TRUE, sep = ', ') %>%
+  mutate(last_hour_n = case_when(last_data_type=="last_ODBA" ~ last_hour_n_ODBA,
+                                    last_data_type=="last_GPS" ~ last_hour_n_GPS,
+                                    last_data_type=="last_sighting" ~ last_hour_n_sightings,
+                                    TRUE ~ NA))
+
+male_tenure = male_departures %>%
+  select(colour_combo, bird_ID, tag_ID, released_dt, last_data_akdt, last_data_type, last_hour_n) %>%
+  rename(arrival_dt=released_dt,
+         departure_dt=last_data_akdt) %>%
+  mutate(arrival_date=floor_date(arrival_dt, unit="days"),
+         departure_date=floor_date(departure_dt, unit="days"),
+         departure_dt_confidence = case_when(last_hour_n>1 & last_data_type!="last_sighting" ~ "OK",
+                                          TRUE ~ "low"),
+         unrevised_tenure_days_exact = as.numeric(difftime(departure_dt, arrival_dt, unit="days")),
+         unrevised_tenure_days = as.numeric(difftime(departure_date, arrival_date, unit="days")))
+
+rm(male_departures, latest_onboard, latest_gps, latest_sightings)
+```
+
+Some males left and then returned again. We will subtract the days that they were away from tenure.
+
+```{r Format days offsite}
+male_trips_offsite <- male_trips_offsite %>%
+  mutate(offsite_days = as.numeric(difftime(as.Date(end_dt_local),
+                                  as.Date(start_dt_local),
+                                  unit="days")))
+
+male_trips_offsite %>%
+  summarise(mean_offsite_days=mean(offsite_days),
+            sd_offsite_days=sd(offsite_days),
+            min_offsite_days=min(offsite_days),
+            max_offsite_days=max(offsite_days))
+```
+
+```{r Summarise days offsite}
+male_offsite_summary = male_trips_offsite %>%
+  select(bird_ID, duration_hrs, offsite_days) %>%
+  rename(offsite_hrs=duration_hrs)
+```
+
+```{r Subtract days offsite from tenure}
+male_tenure <- left_join(male_tenure, male_offsite_summary, join_by('bird_ID')) %>%
+  mutate(tenure_days_exact=case_when(is.na(offsite_hrs) ~ unrevised_tenure_days_exact,
+                                     TRUE ~ unrevised_tenure_days_exact-(offsite_hrs/24)),
+         tenure_days=case_when(is.na(offsite_days)~unrevised_tenure_days,
+                               TRUE ~ unrevised_tenure_days-offsite_days)) %>%
+  select(colour_combo, bird_ID, tag_ID, 
+         arrival_dt, departure_dt, arrival_date, departure_date,
+         tenure_days, tenure_days_exact)
+```
+
+## Examine breeding density relative to other years
+
+In total, there were `r nrow(nests)` breeding females and median male tenure was `r median(male_tenure$tenure_days)` days. This was therefore a moderate density breeding season, compared to other years (Kempenaers and Valcu 2017, Nature; number of breeding females ranges from approx. 23-90). It was higher density year than 2008 and 2009, which were the breeding seasons when data were collected for the previous activity study (Lesku et al. 2012, Science: 39 nests in 2008 and 17 nests in 2009.)
+
+## Exclude unreliable or irrelevant ODBA data
+
+A simple and common measure of activity is overall dynamic body acceleration (ODBA). ODBA is a measure of total movement, combined across the three axes of the accelerometer. It is calculated by first subtracting static acceleration from each axis (acceleration related to posture; most often calculated by taking the 2-second running mean) to get dynamic acceleration, then summing together the absolute dynamic acceleration for each axis (for example, see: https://besjournals.onlinelibrary.wiley.com/doi/10.1111/j.2041-210X.2010.00057.x) ODBA is also commonly used as a proxy for energy expenditure related to movement.
+
+Data have already been excluded when the tag was not on the bird. In a separate script (<i> define-activity-thresholds.RmD </i>) I also defined an activity threshold for each individual bird. 
+
+Below, I am excluding the following data:
+
+* Activity thresholds from birds without reliable estimates (due to <36 hours total available data)
+* Data collected when birds were offsite
+* Data collected <12 hours after putting the tag on
+
+```{r Set minimum hours after release}
+min_hrs_after_release = 12
+```
+
+```{r Filter activity data}
+# Exclude activity thresholds with <36 hours of data (when using individual threshold)
+if(threshold_type=="individual") {
+activity <- activity %>%
+  mutate(activity_threshold=case_when(n_windows_threshold<=36*60/window_length ~ NA,
+                                      TRUE ~ activity_threshold),
+         active=case_when(mean_ODBA>activity_threshold ~ "active",
+                          mean_ODBA<=activity_threshold ~ "inactive",
+                          TRUE ~ NA))
+}
+
+# Exclude trips offsite
+activity <- male_trips_offsite %>%
+  select(colour_combo, bird_ID, start_dt_local, end_dt_local) %>%
+  right_join(., activity, join_by('colour_combo','bird_ID'),
+             relationship="one-to-many") %>%
+  filter(is.na(start_dt_local) |
+         window_end_localtime < start_dt_local |
+         window_end_localtime-window_length*60 > end_dt_local) %>%
+  select(!start_dt_local & !end_dt_local)
+
+# Exclude 12 hours after release
+activity <- tagged_males %>%
+  select(colour_combo, bird_ID, released_dt) %>%
+  right_join(., activity, join_by('colour_combo','bird_ID')) %>%
+  filter(window_end_localtime-window_length*60 > released_dt+(min_hrs_after_release*60*60))
+```
+
+There was also one male who travelled 300 km in one day (out over the ocean for 150km, then back; see map-male-and-nest-locations.Rmd). It doesn't make sense to include this data in our analysis. He was R,Y,DB and his travel date was 20 June.
+
+```{r Exclude day of big trip when male travelled out to sea}
+activity <- activity %>%
+  mutate(window_end_local_date=floor_date(window_end_localtime, unit="day"))
+
+activity <- activity %>%
+  filter(!(colour_combo=="R,Y,DB" & window_end_local_date==as.Date("2022-06-20")))
+```
+
+### Summarise and define activity thresholds and levels
+
+```{r Summarise activity thresholds}
+if(threshold_type=="individual") {
+activity %>% 
+  summarise(min_threshold=min(activity_threshold, na.rm=T),
+            max_threshold=max(activity_threshold, na.rm=T),
+            median_threshold=median(activity_threshold, na.rm=T)) %>%
+  flextable()
+} else {
+  print(paste0("Global threshold = ", global_threshold))
+}
+```
+
+By determining an activity threshold for each individual, based on the distribution of his activity data, we should minimise bias in activity estimates caused by variation in measurements by different devices and minor variations in attachment. However, it is possible that we are also sometimes underestimating the activity of highly active birds and overestimating the activity of less active birds, since these distributions in activity distributions can affect the values of the threshold. Compared to having a global threshold across all birds, this method is therefore more conservative and more likely to underestimate inter-individual variation in activity levels.
+
+Note: Birds without activity thresholds (i.e. <36 hours data) have not been excluded from the "activity" dataset; for some analyses, the ODBA values of these birds are still relevant and worth including.
+
+```{r Redefine activity thresholds with global threshold if applicable}
+if(threshold_type=="global") {
+activity <- activity %>%
+  mutate(activity_threshold=global_threshold,
+         active=case_when(mean_ODBA>global_threshold ~ "active",
+                          TRUE ~ "inactive"))
+}
+```
+
+## Calculate daily activity
+
+```{r Summarise daily activity}
+activity$local_date = floor_date(activity$window_end_localtime, unit="days")
+
+daily_activity <- activity %>%
+  filter(!is.na(activity_threshold)) %>%
+  group_by(bird_ID, tag_ID, colour_combo, local_date) %>%
+  summarise(perc_active=sum(active=="active")/n()*100,
+            total_active=sum(active=="active"),
+            mean_ODBA_active=case_when(perc_active==0 ~ NA,
+                                       TRUE ~ mean(mean_ODBA[active=="active"])),
+            mean_ODBA=mean(mean_ODBA),
+            n_windows=n(),
+            n_hours=n()/(60/window_length))
+```
+
+## Determine distance of males from fertile nests
+
+```{r List nests that could not be genotyped}
+predated_nests <- nests %>%
+  filter(is.na(est_hatch_date)) %>% # predated nests had no estimated hatch date, eggs not floated
+  select(nest, date_found, first_clutchsize, lat, lon)
+
+predated_nests %>% flextable()
+```
+
+To estimate the fertile dates of predated nests, I've assumed that the maximum clutch size would have been 4 (so nests found with clutch size < 4 were found during laying).
+
+For nests that were not found during laying, we only know that the female was no longer fertile when the nest was found. All of the nests were found after the end of the fertile phase for the plot (based on the fertile periods of other nests). I am therefore using the entire fertile phase for the plot as the fertile period for these predated nests. This is used to help establish which males were spending time near the nest when it might have been fertile.
+
+```{r Estimate fertile dates for predated nests}
+predated_nests <- predated_nests %>%
+  mutate(clutch_init = case_when(first_clutchsize<4 ~ date_found-first_clutchsize*86400,
+                                 TRUE ~ NA),
+         penult_egg = case_when(is.na(clutch_init) ~ NA,
+                                TRUE ~ clutch_init + 2*86400),
+         first_fertile_day = case_when(!is.na(clutch_init) ~ clutch_init-5*86400,
+                                       TRUE ~ start_FertilePeriod),
+         last_fertile_day = case_when(!is.na(penult_egg) ~ penult_egg,
+                                      TRUE ~ end_FertilePeriod)
+  )
+
+predated_nests %>% flextable()
+```
+
+```{r Add estimated fertile dates for predated nests to nest data}
+nests <- nests %>%
+  filter(!nest %in% predated_nests$nest) %>%
+  full_join(., predated_nests, 
+            join_by('nest', 'date_found', 'lat','lon','first_clutchsize', 'clutch_init', 'penult_egg','first_fertile_day','last_fertile_day'))
+```
+
+```{r Combine nest, GPS and paternity data}
+nest_parentage <- parentage %>%
+  filter(is.na(Comments) | Comments!="could not be genotyped") %>%
+  select(Nest, LL.father) %>%
+  unique() %>%
+  group_by(Nest) %>%
+  arrange(LL.father) %>%
+  summarise(father1 = first(LL.father),
+            father2 = case_when(last(LL.father)==father1 ~ NA,
+                                TRUE ~ last(LL.father)),
+            n_fathers = n()) %>%
+  rename(nest = Nest)
+```
+
+```{r Reformat nest data to join with male data}
+nest_dates <- nests %>%
+  select(nest, first_fertile_day, last_fertile_day) %>%
+  pivot_longer(cols = first_fertile_day:last_fertile_day,
+               values_to = 'date') %>%
+  filter(!is.na(date)) %>%
+  group_by(nest) %>%
+  complete(date = seq(min(date), max(date), by='days')) %>%
+  select(-name)
+
+nest_long <- left_join(nest_dates, nests, join_by('nest'), relationship='many-to-one') %>%
+  left_join(., nest_parentage, join_by('nest'), relationship='many-to-one') %>%
+  select(nest, date, first_fertile_day, last_fertile_day, lat, lon, father1, father2) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
+```
+
+```{r Summarise male GPS data by date}
+male_date_gps <- male_gps %>%
+  group_by(colour_combo, bird_ID, tag_ID, local_date, released_dt) %>%
+  summarise(n_gps=n(),
+            centroid = st_centroid(st_union(geometry)))
+```
+
+```{r Add activity data to male GPS data}
+daily_activity_gps <- activity %>%
+  group_by(bird_ID, tag_ID, colour_combo, local_date) %>%
+  summarise(activity_threshold=first(activity_threshold),
+            mean_ODBA=mean(mean_ODBA),
+            perc_active=case_when(is.na(activity_threshold) ~ NA,
+                                  TRUE ~ sum(active=="active")/(sum(active=="active")+sum(active=="inactive"))*100),
+            prop_activity=case_when(is.na(activity_threshold) ~ NA,
+                                    TRUE ~ perc_active/100),
+            total_active_windows=sum(active=="active"),
+            n_windows=n(),
+            n_hours=n()/(60/window_length)) %>%
+  mutate(bird_ID=as.factor(bird_ID)) %>%
+  filter(n_hours>min_acc_hrs_per_day) %>%
+  select(bird_ID, tag_ID, colour_combo, local_date, mean_ODBA, perc_active, prop_activity, n_windows) %>%
+  full_join(., male_date_gps, join_by('tag_ID', 'bird_ID', 'colour_combo', 'local_date'), 
+            relationship='many-to-many') %>%
+  filter(!is.na(mean_ODBA))
+```
+
+Note that this next chunk of code takes a while to run (getting distance from each male from each nest on each day).
+
+```{r Combine male and nest data and calculate distance}
+nest_male_date <- inner_join(nest_long,
+                             daily_activity_gps,
+                             join_by('date'=='local_date'),
+                             relationship='many-to-many') %>%
+  filter(!is.na(lat) & !is.na(mean_ODBA))
+
+nest_male_date <- nest_male_date %>%
+  rowwise() %>%
+  mutate(dist_m = st_distance(geometry, centroid))
+```
+
+```{r Format male and nest data for modelling}
+nest_male_date <- nest_male_date %>%
+  filter(!is.na(n_gps)) %>%
+  mutate(success=case_when(colour_combo==father1 ~ 1,
+                           colour_combo==father2 ~ 1,
+                           TRUE ~ 0),
+         bird_ID = as.factor(bird_ID),
+         date = as.factor(date),
+         nest = as.factor(nest))
+```
+
+```{r Summarise distance of successful males from nest}
+nest_male_date %>%
+  filter(success==1) %>%
+  select(nest, father1, father2, dist_m, colour_combo, success) %>%
+  group_by(nest, father1, father2, colour_combo, success) %>%
+  summarise(mean_dist_m=mean(dist_m),
+            min_dist_m=min(dist_m),
+            median_dist_m=median(dist_m),
+            max_dist_m=max(dist_m),
+            n=n()) %>%
+  arrange(median_dist_m) %>%
+  flextable()
+```
+
+In most cases (14/18), the median daily distance of males from the nest they sired was <200 metres.
+There was one male whose median daily distance was slightly further (208 m), but he spent a large proportion of his time within 200 m (mean daily distance = 135 m).
+
+The males with a greater median distance from the nest they sired have limited data (only one day).
+
+We can also summarise the daily min, mean, median and max distance of successful males from nests they sired.
+
+```{r}
+nest_male_date %>%
+  filter(success==1) %>%
+  ungroup() %>%
+  summarise(min_dist=min(dist_m),
+            max_dist=max(dist_m),
+            mean_dist=mean(dist_m),
+            median_dist=median(dist_m),
+            sd_dist=sd(dist_m)) %>%
+  flextable()
+```
+
+
+In a separate script, I explored the three cases where males sired nests far from their territory. P1103 was sired by a male who had a territory further away, but did visit the nest site.
+
+P701 was sired by two males who had neighbouring territories on the other side of the site. The mother was seen on their territories when she was fertile, but apparently decided to build her nest somewhere else.
+
+### Determine likely paternity of predated nests
+
+Males with a median daily distance <=200 metres from a nest site still seem to have a higher probability of siring the eggs. We can use this information to get a list of "likely" fathers of the predated nests.
+
+```{r Generate list of likely fathers of predated nests}
+# potential_fathers <- nest_male_date %>%
+#   filter(nest %in% predated_nests$nest) %>%
+#   group_by(nest, colour_combo) %>%
+#   summarise(first_dist = as.numeric(first(dist_m)),
+#             median_dist = as.numeric(median(dist_m)),
+#             mean_dist = as.numeric(mean(dist_m))) %>%
+#   filter(median_dist<=200) %>%
+#   ungroup() %>%
+#   group_by(colour_combo) %>%
+#   summarise(potential_n_extra_nests=n())
+# 
+# # to get rid of geometry from object
+# potential_fathers <- data.frame(colour_combo = potential_fathers$colour_combo,
+#                                 potential_n_extra_nests = potential_fathers$potential_n_extra_nests)
+# 
+# potential_fathers %>% flextable()
+```
+
+```{r}
+#write.csv(potential_fathers, file=here("outputs","processed-data","potential_fathers.csv"), row.names=FALSE)
+```
+
+```{r Add potential fathers to list of fathers}
+potential_fathers <- read.csv(here("outputs","processed-data","potential_fathers.csv"))
+
+father_summary <- full_join(fathers,
+                             potential_fathers,
+                             by=join_by('LL.father'=='colour_combo')) %>%
+  left_join(.,
+            tagged_males[,c('colour_combo','bird_ID')],
+            by=join_by('LL.father'=='colour_combo')) %>%
+  ungroup() %>%
+  select(!ID.father) %>%
+  rename(ID.father=bird_ID) %>%
+  mutate(success=case_when(n_eggs>0 ~ "yes",
+                           TRUE ~ "no"),
+         potential_n_extra_nests=replace_na(potential_n_extra_nests,0),
+         likely_extra_nests=case_when(potential_n_extra_nests>0 ~ "yes",
+                                       TRUE ~ "less likely"),
+         likely_undetected_success=case_when(success=="no" & likely_extra_nests=="yes" ~ "yes",
+                                             success=="yes" ~ "no",
+                                        TRUE ~ "no")) %>%
+  filter(!is.na(LL.father))
+```
+
+## Combine success and activity data
+
+```{r Add reproductive success data to activity data}
+activity <- left_join(activity,
+                      father_summary,
+                      by=join_by('bird_ID'=='ID.father',
+                                 'colour_combo'=='LL.father')) %>%
+  left_join(., tagged_males[,c('tag_ID','body_mass')], join_by('tag_ID')) %>%
+  mutate(n_eggs=replace_na(n_eggs, 0),
+         n_nests=replace_na(n_nests, 0),
+         potential_n_extra_nests=replace_na(potential_n_extra_nests,0),
+         likely_extra_nests=case_when(potential_n_extra_nests>0 ~ "yes",
+                                      TRUE ~ "less likely"),
+         success=case_when(n_eggs > 0 ~ "yes",
+                           TRUE ~ "no"),
+         likely_undetected_success=case_when(success=="no" & likely_extra_nests=="yes" ~ "yes",
+                                        TRUE ~ "no"))
+
+daily_activity <- left_join(daily_activity,
+                      father_summary,
+                      by=join_by('bird_ID'=='ID.father',
+                                 'colour_combo'=='LL.father')) %>% 
+    left_join(., tagged_males[,c('tag_ID','body_mass')], join_by('tag_ID')) %>%
+  mutate(n_eggs=replace_na(n_eggs,0),
+         n_nests=replace_na(n_nests, 0),
+         potential_n_extra_nests=replace_na(potential_n_extra_nests,0),
+         likely_extra_nests=case_when(potential_n_extra_nests>0 ~ "yes",
+                                      TRUE ~ "less likely"),
+         success=case_when(n_eggs > 0 ~ "yes",
+                           TRUE ~ "no"),
+         likely_undetected_success=case_when(success=="no" & likely_extra_nests=="yes" ~ "yes",
+                                        TRUE ~ "no"))
+```
+
+```{r Add fertile period to activity data}
+activity <- activity %>%
+  mutate(breeding_stage=case_when(window_end_localtime-10*60<=start_FertilePeriod ~ "pre-fertile",
+                           window_end_localtime-10*60>start_FertilePeriod &
+                             window_end_localtime<end_FertilePeriod ~ "fertile",
+                           window_end_localtime>=end_FertilePeriod ~ "post-fertile"))
+
+daily_activity <- daily_activity %>%
+  mutate(breeding_stage=case_when(local_date<=start_FertilePeriod ~ "pre-fertile",
+                           local_date>start_FertilePeriod &
+                             local_date<end_FertilePeriod ~ "fertile",
+                           local_date>=end_FertilePeriod ~ "post-fertile"))
+
+daily_activity <- left_join(daily_activity, 
+                             ff_by_date, 
+                             by=join_by('local_date'=='date'),
+                             relationship = "many-to-one") %>% 
+  mutate(n_FertileFemales=replace_na(n_FertileFemales,0))
+```
+
+## Summarise individual data and exclude incomplete data
+
+```{r Exclude dates with incomplete data}
+daily_activity <- daily_activity %>%
+  filter(n_hours>=min_acc_hrs_per_day)
+```
+
+```{r Summarise daily activity by individual}
+ind_activity <- daily_activity %>%
+  group_by(bird_ID, colour_combo, breeding_stage,
+           body_mass, n_eggs, n_nests, success,
+           likely_undetected_success, potential_n_extra_nests, likely_extra_nests) %>%
+  summarise(n_samples=sum(n_windows),
+            n_days=n(),
+            mean_perc_active=mean(perc_active),
+            total_perc_active=sum(total_active)/sum(n_windows)*100,
+            mean_ODBA=mean(mean_ODBA),
+            mean_ODBA_active=mean(mean_ODBA_active))
+```
+
+Note: There are no males with <2 days of data during the fertile period and >=2 days of data during post-fertile period. None of the males with <2 days of data during the fertile period were successful.
+
+```{r Refine data}
+males_with_sufficient_data = ind_activity %>%
+  filter(breeding_stage=="fertile" & n_days>=min_acc_days) %>%
+  select(colour_combo, bird_ID, n_days, n_samples, success)
+
+males_with_sufficient_data %>%
+  arrange(n_days, n_samples, success) %>%
+  flextable()
+```
+
+There are `r nrow(males_with_sufficient_data)` males with at least `r min_acc_days` days of complete (`r min_acc_hrs_per_day` hours) data during the fertile period, as shown in the table above. 
+
+From here on, the activity datasets are restricted only to these males.
+
+```{r Subset activity dataset}
+daily_activity <- daily_activity %>%
+  filter(bird_ID %in% males_with_sufficient_data$bird_ID &
+           n_hours>=min_acc_hrs_per_day)
+
+ind_activity <- ind_activity %>%
+  filter(bird_ID %in% males_with_sufficient_data$bird_ID)
+```
+
+```{r Add tenure to individual activity}
+ind_activity <- left_join(ind_activity,
+                          male_tenure,
+                          join_by('bird_ID', 'colour_combo'))
+```
+
+# Q: Do males spend more time active when there are more mating opportunities?
+
+The percentage of time that males spent active in a day ranged from less than 20% to over 99% (mean ± standard deviation: `r mean(daily_activity$perc_active)` +/- `r sd(daily_activity$perc_active)`.
+
+```{r Variation in male activity}
+daily_activity %>%
+  ungroup() %>%
+  summarise(min_perc_active=min(perc_active),
+            max_perc_active=max(perc_active),
+            mean_perc_active=mean(perc_active),
+            sd_perc_active=sd(perc_active),
+            n=n(),
+            se_perc_active=sd_perc_active/sqrt(n)) %>%
+  flextable()
+```
+
+```{r Difference in activity when min vs. max fertile females}
+daily_activity %>%
+  ungroup() %>%
+  filter(n_FertileFemales==0 | n_FertileFemales==40) %>%
+  select(colour_combo, perc_active, n_FertileFemales) %>%
+  group_by(colour_combo, n_FertileFemales) %>%
+  summarise(mean_perc_active=mean(perc_active)) %>%
+  pivot_wider(values_from = 'mean_perc_active', names_from = 'n_FertileFemales', names_prefix="ff_") %>%
+  filter(!is.na(ff_40) & !is.na(ff_0)) %>%
+  mutate(diff=ff_40-ff_0,
+         diff_hours=24/100*diff) %>%
+  flextable()
+```
+
+The table above shows the percentage of time that males (each with a unique colour_combo) were active when female fertility was at its peak (40 fertile females, 'ff_40') compared with when females were no longer fertile and were incubating (0 fertile females, 'ff_0'). Many males were much more active during the peak fertile period.
+
+```{r Difference in activity when min vs. max fertile females 2}
+daily_activity %>%
+  ungroup() %>%
+  filter(n_FertileFemales==0 | n_FertileFemales==40) %>%
+  select(colour_combo, perc_active, n_FertileFemales) %>%
+  group_by(colour_combo, n_FertileFemales) %>%
+  summarise(mean_perc_active=mean(perc_active)) %>%
+  pivot_wider(values_from = 'mean_perc_active', names_from = 'n_FertileFemales', names_prefix="ff_") %>%
+  filter(!is.na(ff_40) & !is.na(ff_0)) %>%
+  mutate(diff=ff_40-ff_0,
+         diff_hours=24/100*diff) %>%
+  ungroup() %>%
+  summarise(average_within_ind_diff_hours = mean(diff_hours)) %>%
+  flextable()
+```
+
+Within individual males, the average difference in activity between peak fertile females and no fertile females was over 10 hours.
+
+```{r Difference in activity when min vs. max fertile females 3}
+daily_activity %>%
+  ungroup() %>%
+  filter(n_FertileFemales==0 | n_FertileFemales==40) %>%
+  select(colour_combo, perc_active, n_FertileFemales) %>%
+  group_by(n_FertileFemales) %>%
+  summarise(mean_perc_active=mean(perc_active)) %>%
+  pivot_wider(values_from = 'mean_perc_active', names_from = 'n_FertileFemales', names_prefix="ff_") %>%
+  mutate(diff=ff_40-ff_0,
+         diff_hours=24/100*diff) %>%
+  ungroup() %>%
+  summarise(average_among_ind_diff_hours = mean(diff_hours)) %>%
+  flextable()
+```
+
+Among all males, the average difference was just under 9 hours.
+
+*Prediction*: Males increase their activity (% time active per day) when there are fertile females at the site.
+
+```{r Summarise data for fertile and postfertile period}
+postfertile_males <- ind_activity %>%
+  filter(breeding_stage=="post-fertile" & n_days>=2) %>%
+  group_by(bird_ID) %>%
+  summarise(mean(mean_perc_active))
+
+fertile_males <- ind_activity %>%
+  filter(breeding_stage=="fertile") %>% # already filtered to n_days>=2
+  group_by(bird_ID) %>%
+  summarise(mean(mean_perc_active))
+```
+
+## Fig: Breeding stage and male % active
+
+```{r}
+ind_activity_sub <- ind_activity %>%
+  filter(n_days>=2 & breeding_stage!="pre-fertile") %>%
+  mutate(breeding_stage=as.factor(breeding_stage))
+
+ind_activity_plotdat <- rbind(ind_activity_sub %>% mutate(plot_type="box"), 
+                              ind_activity_sub %>% mutate(plot_type="point"))
+
+ind_activity_plotdat$plot_factor <- factor(
+  paste(ind_activity_plotdat$breeding_stage, ind_activity_plotdat$plot_type),
+  levels = c("fertile box", "fertile point", "post-fertile point", "post-fertile box"))
+
+activity_fert_boxplot <- ggplot() +
+  theme_classic()+
+  geom_boxplot(data = ind_activity_plotdat %>% 
+                 filter(plot_factor == "fertile box"),
+               aes(x = plot_factor,
+                   y = total_perc_active),
+               outlier.shape=default_shape,
+               fill="white",
+               width=0.7) +
+  geom_point(data = ind_activity_plotdat %>% 
+                 filter(plot_factor == "fertile point" |
+                          plot_factor == "post-fertile point"),
+               aes(x = plot_factor,
+                   y = total_perc_active,
+                   fill=success, colour=success, alpha=success),
+             size=small.point.size,
+             position=position_jitter(w=0.15, h=0, seed = 1)) +
+  geom_boxplot(data = ind_activity_plotdat %>% 
+                 filter(plot_factor == "post-fertile box"),
+               aes(x = plot_factor,
+                   y = total_perc_active),
+               outlier.shape=default_shape,
+               fill="white",
+               width=0.7)+
+  geom_line(data = ind_activity_plotdat %>% 
+                 filter(plot_factor == "fertile point" |
+                          plot_factor == "post-fertile point"),
+            aes(x = plot_factor,
+                y = total_perc_active,
+                colour=success, group=bird_ID, alpha=success), 
+            size=small.point.size/3,
+            position=position_jitter(w=0.15, h=0, seed = 1)) +
+  coord_cartesian(ylim=c(0,100))+
+  scale_y_continuous(breaks=c(seq(0,100,by=20)),
+                     expand=c(0,0))+
+  scale_x_discrete(breaks = c("fertile box", "post-fertile box"),
+                   labels = c("fertile","post-fertile"))+
+  scale_colour_manual(values=c(fail_colour,success_colour), name="Sired offspring?")+
+  scale_fill_manual(values=c(fail_colour,success_colour), name="Sired offspring?")+
+  scale_alpha_manual(values=c(0.5,0.8), name="Sired offspring?")+
+  scale_shape_manual(values=c(default_shape), guide="none") +
+  xlab("\n breeding stage")+
+  ylab("male activity (% time)\n")+
+  theme(text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        legend.position="right",
+        legend.justification="top",
+        legend.background = element_blank(),
+        legend.box.background = element_rect(colour = "grey"))
+
+activity_fert_boxplot
+```
+
+```{r Summarise means for fertile activity}
+ind_activity %>%
+  group_by(breeding_stage, success) %>%
+  summarise(mean_total_perc_active = mean(total_perc_active),
+            sd_total_perc_active = sd(total_perc_active),
+            n=n(),
+            se_total_perc_active = sd_total_perc_active/sqrt(n)) %>%
+  flextable()
+```
+
+In the plot above, there are `r length(unique(ind_activity$colour_combo))` individual males in total, `r unique(subset(ind_activity, breeding_stage=="post-fertile")$colour_combo)` of which have post-fertile data. Males with "uncertain" success are treated as "no" success. Their inclusion or exclusion does not ever seem to affect results.
+
+Each datapoint represents the mean activity of an individual male. The pattern we see here is similar to what was found in Lesku et al. 2012, although activity levels are shifted around 30% lower. 
+
+```{r Convert factors for model}
+daily_activity <- daily_activity %>%
+  mutate(prop_activity=perc_active/100,
+         bird_ID=as.factor(bird_ID),
+         factor_date=as.factor(local_date),
+         success=as.factor(success)) %>%
+  mutate(prop_activity=case_when(prop_activity==1 ~ 0.99999,
+                               TRUE ~ prop_activity))
+```
+
+```{r LME for breeding stage and percent male activity, width=8}
+stage_m <- glmmTMB(prop_activity ~ breeding_stage*success + (breeding_stage|bird_ID) + (1|factor_date),
+                   data=daily_activity,
+                   # data=daily_activity %>% filter(likely_undetected_success=="no"),
+                   family=beta_family(link="logit"))
+summary(stage_m)
+confint(stage_m, level=0.95)
+
+simulationOutput <- simulateResiduals(stage_m)
+testResiduals(simulationOutput)
+```
+
+```{r}
+stage_m_flex <- as_flextable(stage_m)
+stage_m_flex
+if(save_tables==TRUE){
+save_as_docx(stage_m_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/breeding_stage_model.docx"))
+}
+```
+
+When 'potentially' successful males are excluded the key results remain the same. There are no significant issues with model dispersion or influence of outliers.
+
+```{r}
+stage_emm_flex <- as_flextable(as.data.frame(emmeans(stage_m, ~ success | breeding_stage)))
+
+stage_emm_flex
+
+if(save_tables==TRUE){
+save_as_docx(stage_emm_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/breeding_stage_emm.docx"))
+}
+```
+
+Male spent more time active during the fertile stage, compared with the post-fertile stage. During the fertile period, successful males were more active than unsuccessful males; during the post-fertile stage, there was no difference. The inclusion of males that were more likely to have sired additional offspring (predated before they could be sampled) had no effect on these results.
+
+*Prediction 2* Male activity (% time active per day) increases with the number of fertile females at the site.
+
+We can also examine this trend in more detail, by looking at activity and the number of fertile females each day across the season.
+
+## Fig: Date and male % active
+
+```{r Get sample sizes for each date}
+date_activity_n <- daily_activity %>%
+  group_by(local_date) %>%
+  summarise(n_ind=n_distinct(colour_combo))
+```
+
+```{r Format date labels}
+date_labels = c("","","","","",
+                "12 June", "", "", "",
+                "16 June", "", "", "",
+                "20 June", "", "", "",
+                "24 June", "", "", "",
+                "28 June", "", "", "",
+                "2 July", "","","",
+                "6 July", "","","",
+                "10 July", "")
+```
+
+```{r Male time spent active, fig.height=7,fig.width=6, message=FALSE}
+boxplot_active_date <- ggplot(daily_activity, aes(x=local_date,
+                                                 y=perc_active,
+                                                 group=local_date))+
+  theme_classic()+
+  theme(panel.grid.minor.y = element_line(size=.1, color="darkgrey"))+
+  geom_boxplot(colour="gray30", outlier.shape = NA)+
+  geom_point(size=small.point.size,
+              aes(colour=success, alpha=success, fill=success),
+             shape=default_shape)+
+  coord_flip(xlim = c(max(daily_activity$local_date)+24*60*30, # manually adjusted
+                            min(daily_activity$local_date)-24*60*30),
+             ylim=c(0,115))+
+  scale_x_continuous(breaks = c(seq(
+                              local_date_to_posix('2022-06-11')-8*24*60*30,
+                              local_date_to_posix('2022-07-11'),
+                              by="days")),
+                     labels=date_labels,
+                     expand=c(0,0))+
+  scale_y_continuous(breaks=seq(0,100,by=20),
+                     expand=c(0,0)) +
+  scale_colour_manual(values = c(fail_colour, success_colour), guide="none")+
+  scale_fill_manual(values = c(fail_colour, success_colour), guide="none")+
+  scale_alpha_manual(values = c(0.5, 0.8), guide="none")+
+  xlab("date\n")+
+  ylab("\nmale activity (% time)")+
+  geom_text(data = date_activity_n,
+            family=font.family,
+            size=(label.size-2)/.pt,
+            colour="gray50",
+            aes(local_date, 107, label = n_ind),
+            vjust = 0.5,
+            hjust = 0)+
+  theme(axis.ticks.length.y = unit(0.07, "cm"),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+boxplot_active_date
+```
+
+```{r Male time spent active and breeding stage, fig.height=4.5, fig.width=7, message=FALSE}
+hor_barplot_ff <- barplot_ff +
+  coord_flip(xlim = c(max(daily_activity$local_date)+24*60*30, #manually adjusted
+                            min(daily_activity$local_date)-24*60*30),
+             ylim=c(0,42)) +
+    theme(panel.grid.minor.y = element_line(size=.1, color="grey"))+ 
+    scale_x_continuous(breaks=c(seq(
+                       min(daily_activity$local_date)-2*24*60*30,
+                       max(daily_activity$local_date),
+                       by="1 days")),
+                       expand=c(0,0))+
+    scale_y_continuous(expand=c(0,0),
+                       breaks = seq(0,45,by=10))+
+    theme(axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          text=element_text(family=font.family),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size)) +
+  ylab("\n number of fertile females")
+
+season_act_plot <- ggarrange(
+  boxplot_active_date +
+    theme(panel.background = element_blank()),
+  hor_barplot_ff,
+  nrow=1,
+  widths = c(1, 0.5))
+```
+
+```{r LME for fertile females and percent male activity}
+ff_m <- glmmTMB(prop_activity ~ 
+                  scale(n_FertileFemales) + 
+                  (scale(n_FertileFemales)|bird_ID) +
+                  (1|factor_date),
+                  data = daily_activity,
+                  family = beta_family(link="logit"))
+summary(ff_m)
+confint(ff_m, level=0.95)
+
+simulationOutput <- simulateResiduals(ff_m)
+testResiduals(simulationOutput)
+```
+
+```{r}
+ff_flex <- as_flextable(ff_m)
+if(save_tables==TRUE){
+save_as_docx(ff_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/fertile_females_model.docx"))
+}
+```
+
+Male activity (% time) was higher when there were more fertile females at the site.
+
+We can separate within- and between- individual effects using within-subject centering (https://www.sciencedirect.com/science/article/pii/S0003347208005423?via%3Dihub).
+
+```{r Determine mean activity for each individual}
+mean_daily_activity <- daily_activity %>%
+  mutate(hours_active=n_hours*prop_activity) %>%
+  group_by(colour_combo, bird_ID) %>%
+  summarise(ind_mean_prop_activity = mean(prop_activity),
+            ind_mean_ODBA = mean(mean_ODBA),
+            success = first(success),
+            likely_undetected_success = first(likely_undetected_success),
+            n_days = n(),
+            n_hours = sum(n_hours),
+            total_prop_activity = sum(hours_active)/sum(n_hours))
+
+centred_daily_activity <- left_join(daily_activity, mean_daily_activity,
+                            join_by('colour_combo','bird_ID',
+                                    'success', 'likely_undetected_success'),
+                            relationship='many-to-one') %>%
+  mutate(perc_active = prop_activity-ind_mean_prop_activity)
+```
+
+```{r Model within and between individual effects}
+ff_m2 <- glmmTMB(n_FertileFemales ~ scale(perc_active) + scale(ind_mean_prop_activity)  + (1|bird_ID),
+                  data = centred_daily_activity)
+summary(ff_m2)
+confint(ff_m2, level=0.95)
+
+simulationOutput <- simulateResiduals(ff_m2)
+testDispersion(simulationOutput)
+```
+
+```{r}
+ff2_flex <- as_flextable(ff_m2)
+if(save_tables==TRUE){
+save_as_docx(ff2_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/fertile_females_model2.docx"))
+}
+ff2_flex
+```
+
+Relationship between male activity and number of fertile females attributed to within-individual changes.
+
+## Fig: Male % active and number of fertile females
+
+```{r}
+m_effects = effects::allEffects(ff_m, xlevels = 160)
+m_ff_effects = m_effects$`scale(n_FertileFemales)` %>% data.frame
+```
+
+```{r fig.width=5, fig.height=3}
+activity_ff_plot <- ggplot(daily_activity, aes(x=n_FertileFemales,
+                                               y=perc_active))+
+  theme_classic()+
+  #geom_boxplot(colour="gray30", outlier.shape = NA)+
+  geom_point(size=small.point.size,
+             shape=default_shape,
+             alpha=0.15,
+             colour=male_colour,
+             fill=male_colour)+
+  geom_line(data = m_ff_effects,
+            aes(y = fit*100, x = n_FertileFemales),
+            colour=col_scale[1]) +
+  geom_ribbon(data = m_ff_effects,
+              aes(y = fit*100, x = n_FertileFemales, ymin = lower*100, ymax = upper*100),
+              alpha = 0.2, fill=col_scale[1])+
+  coord_cartesian(ylim = c(0,102)) +
+  scale_y_continuous(breaks=seq(0,100,by=20),
+                     expand = c(0,0)) +
+  xlab("\nnumber of fertile females\n")+
+  ylab("daily activity (% time)\n")+
+  theme(axis.ticks.length.y = unit(0.07, "cm"),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+activity_ff_plot
+```
+
+```{r}
+if(save_plots==TRUE){
+  ggsave(plot=activity_ff_plot,
+       filename='figure-activity-fertility-means-plot.jpg',
+       path=output_path,
+       width=16,
+       height=12.5,
+       units="cm",
+       dpi=300)
+}
+```
+
+## Fig: Male ODBA and number of fertile females
+
+```{r LME for fertile females and male odba}
+ff_m_odba <- glmmTMB(mean_ODBA ~ scale(n_FertileFemales) +
+                     (scale(n_FertileFemales)|bird_ID) +
+                     (1|factor_date),
+                  data = daily_activity,
+                  family = beta_family(link="logit"))
+summary(ff_m_odba)
+confint(ff_m_odba, level=0.95)
+
+simulationOutput <- simulateResiduals(ff_m_odba)
+testResiduals(simulationOutput)
+```
+
+```{r}
+ff_odba_flex <- as_flextable(ff_m_odba)
+if(save_tables==TRUE){
+save_as_docx(ff_odba_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/fertile_females_odba_model.docx"))
+}
+```
+
+```{r fig.width=3, fig.height=2.4}
+m_effects = effects::allEffects(ff_m_odba, xlevels = 160)
+m_ff_odba_effects = m_effects$`scale(n_FertileFemales)` %>% data.frame
+
+odba_ff_rawbased_plot <- ggplot(daily_activity, aes(x=n_FertileFemales,
+                                               y=mean_ODBA))+
+  theme_classic()+
+  #geom_boxplot(colour="gray30", outlier.shape = NA)+
+  geom_point(size=small.point.size,
+             shape=default_shape,
+             alpha=0.15,
+             colour=male_colour,
+             fill=male_colour)+
+  geom_line(data = m_ff_odba_effects,
+            aes(y = fit, x = n_FertileFemales),
+            colour=col_scale[1]) +
+  geom_ribbon(data = m_ff_odba_effects,
+              aes(y = fit, x = n_FertileFemales, ymin = lower, ymax = upper),
+              alpha = 0.2, fill=col_scale[1])+
+  coord_cartesian(ylim = c(0,0.9)) +
+  scale_y_continuous(breaks=seq(0,1,by=0.2),
+                     expand = c(0,0)) +
+  xlab("\nnumber of fertile females\n")+
+  ylab("mean daily ODBA\n")+
+  theme(axis.ticks.length.y = unit(0.07, "cm"),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+odba_ff_rawbased_plot
+```
+
+
+
+```{r Summarise min and max activity in relation to number fertile females}
+daily_activity %>%
+  ungroup() %>%
+  filter(n_FertileFemales == 0 | n_FertileFemales==40) %>%
+  group_by(n_FertileFemales) %>%
+  summarise(mean_perc_active = mean(perc_active),
+            sd_perc_active = sd(perc_active),
+            n=n(),
+            se_perc_active=sd_perc_active/sqrt(n),
+            mean_hours_active = 24/100*mean_perc_active,
+            sd_hours_active = 24/100*sd_perc_active,
+            se_hours_active = 24/100*se_perc_active)
+```
+
+# Combined figure: Date and male activity
+
+```{r fig.height=8, fig.width=6.4}
+layout <- "
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+"
+
+fig1 <- activity_fert_boxplot + ylab("\nmale activity (% time)\n") + xlab("\nbreeding stage\n\n") +
+  plot_spacer() +
+  #plot_spacer() +
+  season_act_plot +
+  plot_layout(design=layout) +
+  plot_annotation(tag_levels = 'a',
+                  tag_prefix = '(',
+                  tag_suffix = ')') &
+  theme(plot.tag = element_text(size=label.size, family = font.family, face="italic"))
+
+
+fig1
+```
+
+```{r}
+if(save_plots==TRUE){
+ggsave(plot=fig1,
+       filename='figure1-activity-stage_date.jpg',
+       path=output_path,
+       width=16,
+       height=20,
+       units="cm",
+       dpi=300)
+}
+```
+
+# Combined figure: Fertile females and male activity
+
+```{r fig.height=2.5, fig.width=6.4}
+fig2 <- activity_ff_plot +
+  plot_spacer() +
+  odba_ff_rawbased_plot +
+  plot_layout(nrow = 1,
+              widths=c(1,0.1,1),
+              heights=c(1))+
+  plot_annotation(tag_levels = 'a',
+                  tag_prefix = '(',
+                  tag_suffix = ')') &
+  theme(plot.tag = element_text(size=label.size, family = font.family, face="italic"),
+        plot.tag.position = c(.27, .96))
+
+fig2
+```
+
+```{r}
+if(save_plots==TRUE){
+ggsave(plot=fig2,
+       filename='figure2-activity-fertilefemales.jpg',
+       path=output_path,
+       width=16,
+       height=7,
+       units="cm",
+       dpi=300)
+}
+```
+
+```{r}
+rm(stage_m, stage_m_flex,
+   m_ff_odba_effects, m_ff_effects, m_effects,
+   ff_flex, ff_m, ff_m_odba, ff_m2,
+   ff_odba_flex, ff2_flex)
+```
+
+# Q: How does male behaviour relate to mating and reproductive success?
+
+This can be analysed as a binary (yes/no) or numeric (number of females) outcome. I've included both, since I originally used a binary analysis and then changed it.
+
+*Prediction 2* Increased time spent active (%) is associated with increased likelihood of mating success
+*Prediction 3* Males who spend more days at the site during the fertile period have a higher probability of mating success
+*Prediction 4* Males with higher mean ODBA have a higher probability of mating success.
+
+In the plots and analyses below, I've only included data from the fertile stage, and only for males with at least `r min_acc_days` days of data during the fertile stage. 
+
+However, I realised that it's a problem to exclude males with limited data for the tenure analysis, because then we're excluding all the males who stayed for less than `r min_acc_days`. So I am now also analysing the effects of tenure on mating success in a separate model, including the full dataset.
+
+```{r Adapt data for analyses}
+ind_activity <- ind_activity %>%
+  mutate(prop_activity=total_perc_active/100,
+         recording_hours=n_samples*window_length/60,
+         arrival_day=as.numeric(difftime(arrival_date, 
+                                         local_date_to_posix("2022-06-01"),
+                                         units="days")),
+         success_num = case_when(success=="yes" ~ 1,
+                                 success=="no" ~ 0))
+
+ind_fertile_activity <- ind_activity %>%
+  filter(breeding_stage=="fertile" & n_days>=min_acc_days)
+
+ind_tenure <- left_join(male_tenure, father_summary, 
+                        join_by('colour_combo'=='LL.father',
+                                'bird_ID'=='ID.father')) %>%
+    mutate(arrival_day=as.numeric(difftime(arrival_date, 
+                                         local_date_to_posix("2022-06-01"),
+                                         units="days")),
+           likely_extra_nests=case_when(potential_n_extra_nests>0 ~ "yes",
+                                      TRUE ~ "less likely"),) %>%
+    replace(is.na(.), 0)
+```
+
+```{r}
+ind_fertile_activity %>%
+  ungroup() %>%
+  summarise(min_total_perc_active=min(total_perc_active),
+            max_total_perc_active=max(total_perc_active),
+            mean_total_perc_active=mean(total_perc_active),
+            sd_total_perc_active=sd(total_perc_active),
+            n=n(),
+            se_total_perc_active=sd_total_perc_active/sqrt(n)) %>%
+  flextable()
+```
+
+```{r Check correlations between variables}
+cor(ind_fertile_activity$tenure_days, ind_fertile_activity$recording_hours)
+cor(ind_fertile_activity$tenure_days, ind_fertile_activity$prop_activity)
+cor(ind_fertile_activity$prop_activity, ind_fertile_activity$arrival_day)
+cor(ind_fertile_activity$tenure_days, ind_fertile_activity$arrival_day)
+```
+
+Tenure is highly correlated with number of hours of data recorded, which makes sense. So we should not include both these variables in the model. Tenure is the more interesting and biologically meaningful variable, so I'll focus on that.
+
+## Mating success (number of females with which a male sired offspring)
+
+### Fig: % active and mating success
+
+There are often concerns about models with Poisson distributions. We confirmed that all model assumptions were met and that there were no issues with overdispersion. Running the model with a Gaussian distribution violates model assumptions but still produces the same conclusions.
+
+```{r Mating success and activity model}
+success_m1 <- glmmTMB(n_nests ~ scale(prop_activity) + scale(log(tenure_days)) + scale(arrival_day),
+                   data=ind_fertile_activity,
+                   # data=ind_fertile_activity %>% filter(likely_undetected_success=="no"),
+                   family=poisson)
+summary(success_m1)
+confint(success_m1, level=0.95)
+
+simulationOutput <- simulateResiduals(fittedModel = success_m1, plot=F)
+testResiduals(simulationOutput)
+```
+
+```{r}
+success_m1_flex <- as_flextable(success_m1)
+if(save_tables==TRUE){
+save_as_docx(success_m1_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/activity_mating_model.docx"))
+}
+```
+
+The effect of activity is similar when the males with territories around predated (unsampled) nests are excluded, although effect of tenure becomes larger.
+
+```{r}
+m1_effects = effects::allEffects(success_m1, xlevels = 100)
+m1_active_eff = m1_effects$`scale(prop_activity)` %>% data.frame
+m1_tenure_eff = m1_effects$`scale(log(tenure_days))` %>% data.frame
+
+m1_effects2 = effects::allEffects(success_m1, xlevels = 100, confidence.level=0.95)
+m1_active_eff2 = m1_effects2$`scale(prop_activity)` %>% data.frame
+```
+
+```{r Export effects of activity on mating success}
+m1_effects = as.data.frame(confint(success_m1, level=0.95))
+
+write.csv(m1_effects,
+          file=glue("{output_path}/activity-mating-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
+
+```
+
+```{r fig.width=3.6, fig.height=3.6}
+success_active_plot <- ggplot(ind_fertile_activity)+
+  geom_line(data = m1_active_eff,
+            aes(y = fit, x = prop_activity*100),
+            colour=col_scale[2]) +
+  geom_ribbon(data = m1_active_eff,
+              aes(y = fit, x =prop_activity*100, ymin = lower, ymax = upper),
+              alpha = 0.2, fill=col_scale[2])+
+  geom_jitter(aes(x=prop_activity*100, y=n_nests, shape=likely_extra_nests),
+             fill=male_colour,
+             colour=male_colour,
+             size=point_size,
+             alpha=point_alpha,
+             width=0.005, height=0.04) +
+  theme_classic()+
+  scale_shape_manual(values=c(default_shape, default_shape), guide="none")+
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0,100,by=20))) +
+  scale_y_continuous(breaks=c(seq(0,2,by=1))) +
+  coord_cartesian(xlim=c(10,90), ylim=c(0,2.1))+
+  xlab("\n activity (% time)") +
+  ylab("mating success\n")+
+  theme(legend.position="right",
+        plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+success_active_plot
+```
+
+### Fig: Tenure and mating success
+
+```{r Mating success and tenure model}
+success_mt <- glmmTMB(n_nests ~ scale(log(tenure_days_exact)) + scale(arrival_day),
+                   data=ind_tenure,
+                   # data=ind_tenure %>% filter(potential_n_extra_nests==0),
+                   family=poisson)
+
+summary(success_mt)
+confint(success_mt, level=0.95)
+
+simulationOutput <- simulateResiduals(fittedModel = success_mt, plot=F)
+plot(simulationOutput)
+testDispersion(simulationOutput)
+```
+
+```{r}
+success_mt_flex <- as_flextable(success_mt)
+if(save_tables==TRUE){
+save_as_docx(success_mt_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/tenure_mating_model.docx"))
+}
+```
+
+
+The effect of activity is similar when the males with territories around predated (unsampled) nests are excluded, although effect of tenure becomes larger.
+
+```{r}
+mt_effects = effects::allEffects(success_mt, xlevels = 100)
+mt_tenure_eff = mt_effects$`scale(log(tenure_days_exact))` %>% data.frame
+```
+
+```{r Export effects of tenure on mating success}
+mt_effects = as.data.frame(confint(success_mt, level=0.95))
+
+write.csv(mt_effects,
+          file=glue("{output_path}/tenure-mating-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
+
+```
+
+```{r fig.width=3.6, fig.height=3.6}
+success_tenure_plot <- ggplot(ind_tenure)+
+  geom_line(data = mt_tenure_eff,
+            aes(y = fit, x = tenure_days_exact),
+            colour=col_scale[1]) +
+  geom_ribbon(data = mt_tenure_eff,
+              aes(y = fit, x =tenure_days_exact, ymin = lower, ymax = upper),
+              alpha = 0.2, fill=col_scale[1]) +
+  geom_jitter(aes(x=tenure_days_exact, y=n_nests, shape=likely_extra_nests),
+             fill=male_colour,
+             colour=male_colour,
+             size=point_size,
+             alpha=point_alpha,
+             width=0.01, height=0.05) +
+  theme_classic()+
+  scale_shape_manual(values=c(default_shape, default_shape), guide="none")+
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0,30,by=10))) +
+  coord_cartesian(xlim=c(0,32), ylim=c(0,2.1))+
+  scale_y_continuous(breaks=c(seq(0,2,by=1))) +
+  xlab("\n tenure (days)") +
+  ylab("mating success\n")+
+  theme(legend.position="right",
+        plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+success_tenure_plot
+```
+
+I double-checked these long tenures of unsuccessful males - they were mostly at the site or very close by, including during the fertile period. In other words, they had plenty of opportunity to sire offspring at the study site, but didn't.
+
+```{r Average tenure}
+ind_tenure %>%
+  ungroup() %>%
+  summarise(mean_tenure=mean(tenure_days_exact),
+            sd_tenure=sd(tenure_days_exact),
+            n=n(),
+            se_tenure=sd_tenure/sqrt(n))
+```
+
+```{r Successful male tenure}
+ind_fertile_activity %>%
+  filter(success=="yes") %>%
+  select(tenure_days_exact, n_nests) %>%
+  arrange(tenure_days_exact)
+```
+
+### Fig: ODBA and mating success
+
+```{r Mating success and odba model}
+success_m2 <- glmmTMB(n_nests ~ scale(mean_ODBA) + scale(log(tenure_days)) + scale(arrival_day),
+                   data=ind_fertile_activity,
+                   # data=ind_fertile_activity %>% filter(likely_undetected_success=="no"),
+                   family=poisson)
+                   #family=gaussian)
+summary(success_m2)
+confint(success_m2, level=0.95)
+
+simulationOutput <- simulateResiduals(fittedModel = success_m2, plot=F)
+testResiduals(simulationOutput)
+plot(simulationOutput)
+```
+
+```{r}
+success_m2_flex <- as_flextable(success_m2)
+if(save_tables==TRUE){
+save_as_docx(success_m2_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/odba_mating_model.docx"))
+}
+```
+
+Similar effects when males near predated nests are excluded.
+
+```{r}
+m2_effects = effects::allEffects(success_m2, xlevels = 100)
+m2_active_eff = m2_effects$`scale(mean_ODBA)` %>% data.frame
+m2_tenure_eff = m2_effects$`scale(log(tenure_days))` %>% data.frame
+```
+
+```{r fig.width=2, fig.height=2.4}
+success_odba_plot <- ggplot(ind_fertile_activity)+
+  geom_line(data = m2_active_eff,
+            aes(y = fit, x = mean_ODBA),
+            colour=col_scale[1]) +
+  geom_ribbon(data = m2_active_eff,
+              aes(y = fit, x = mean_ODBA, ymin = lower, ymax = upper),
+              alpha = 0.2, fill=col_scale[1])+
+  geom_jitter(aes(x=mean_ODBA, y=n_nests, shape=likely_extra_nests),
+             fill=male_colour,
+             colour=male_colour,
+             size=point_size,
+             alpha=point_alpha,
+             width=0.005, height=0.04) +
+  theme_classic()+
+  scale_shape_manual(values=c(default_shape, default_shape), guide="none")+
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0,0.5,by=0.1))) +
+  scale_y_continuous(breaks=c(seq(0,2,by=1))) +
+  coord_cartesian(xlim=c(0.1,0.53), ylim=c(0,2.1))+
+  xlab("\n mean ODBA (g)") +
+  ylab("mating success\n")+
+  theme(legend.position="right",
+        plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+success_odba_plot
+```
+
+## Reproductive success (number of offspring sired)
+
+*Prediction 5* Increased time spent active (%) is associated with increased reproductive success
+*Prediction 6* Males with longer site tenure have higher reproductive success
+*Prediction 7* Males with longer site tenure have higher reproductive success
+
+### Fig: % active and reproductive success
+
+```{r Reproductive success and activity model}
+success_m3 <- glmmTMB(n_eggs ~ scale(prop_activity) + scale(log(tenure_days)) + scale(arrival_day),
+                  data=ind_fertile_activity,
+                  # data=ind_fertile_activity %>% filter(likely_extra_nests=="less likely"),
+                  family=nbinom2)
+summary(success_m3)
+
+simulationOutput <- simulateResiduals(fittedModel = success_m3, plot=F)
+plot(simulationOutput)
+```
+
+```{r}
+success_m3_flex <- as_flextable(success_m3)
+if(save_tables==TRUE){
+save_as_docx(success_m3_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/activity_reproduction_model.docx"))
+}
+```
+
+
+Similar effects when males near predated nests excluded.
+
+```{r}
+m3_effects = effects::allEffects(success_m3, xlevels = 100)
+m3_active_eff = m3_effects$`scale(prop_activity)` %>% data.frame
+m3_tenure_eff = m3_effects$`scale(log(tenure_days))` %>% data.frame
+```
+
+```{r Export effects of activity on reproductive success}
+m3_effects = as.data.frame(confint(success_m3, level=0.95))
+
+write.csv(m3_effects,
+          file=glue("{output_path}/activity-repr-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
+
+```
+
+```{r fig.width=2, fig.height=2.4}
+egg_active_plot <- ggplot(ind_fertile_activity)+
+  geom_line(data = m3_active_eff,
+            aes(y = fit, x = prop_activity*100),
+            colour=col_scale[2]) +
+  geom_ribbon(data = m3_active_eff,
+              aes(y = fit, x =prop_activity*100, ymin = lower, ymax = upper),
+              alpha = 0.2, fill=col_scale[2])+
+  geom_jitter(aes(x=prop_activity*100, y=n_eggs, shape=likely_extra_nests),
+             fill=male_colour,
+             colour=male_colour,
+             size=point_size,
+             alpha=point_alpha,
+             width=0.005, height=0.15) +
+  theme_classic()+
+  scale_shape_manual(values=c(default_shape, default_shape), guide="none")+
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0,90,by=20))) +
+  coord_cartesian(xlim=c(10,90), ylim=c(0,6.2))+
+  xlab("\n activity (% time)") +
+  ylab("reproductive success\n")+
+  theme(legend.position="right",
+        plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+egg_active_plot
+```
+
+### Fig: Tenure and reproductive success
+
+```{r Reproductive success and tenure model}
+success_mt2 <- glmmTMB(n_eggs ~ scale(log(tenure_days_exact)) + scale(arrival_day),
+                   data=ind_tenure,
+                   # data=ind_tenure %>% filter(potential_n_extra_nests==0),
+                   family=nbinom2)
+summary(success_mt2)
+confint(success_mt2, level=0.95)
+
+simulationOutput <- simulateResiduals(fittedModel = success_mt2, plot=F)
+plot(simulationOutput)
+testDispersion(simulationOutput)
+```
+
+Same conclusions when males near predated nests are excluded.
+
+```{r}
+success_mt2_flex <- as_flextable(success_mt2)
+if(save_tables==TRUE){
+save_as_docx(success_mt2_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/tenure_reproduction_model.docx"))
+}
+```
+
+```{r}
+mt2_effects = effects::allEffects(success_mt2, xlevels = 100)
+mt2_tenure_eff = mt2_effects$`scale(log(tenure_days_exact))` %>% data.frame
+```
+
+```{r Export effects of tenure on reproductive success}
+mt2_effects = as.data.frame(confint(success_mt2, level=0.95))
+
+write.csv(mt2_effects,
+          file=glue("{output_path}/tenure-reproduction-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
+
+```
+
+```{r, fig.width=2, fig.height=2.4}
+egg_tenure_plot <- ggplot(ind_tenure) +
+  geom_line(data = mt2_tenure_eff,
+            aes(y = fit, x = tenure_days_exact),
+            colour=col_scale[1]) +
+  geom_ribbon(data = mt2_tenure_eff,
+              aes(y = fit, x = tenure_days_exact, ymin = lower, ymax = upper),
+              alpha = 0.2, fill=col_scale[1])+
+  geom_jitter(aes(x=tenure_days_exact, y=n_eggs, shape=likely_extra_nests),
+             fill=male_colour,
+             colour=male_colour,
+             size=point_size,
+             alpha=point_alpha,
+             width=0.3, height=0.15) +
+  theme_classic()+
+  scale_shape_manual(values=c(default_shape, default_shape), guide="none")+
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0,30,by=10))) +
+  coord_cartesian(xlim=c(0,32), ylim=c(0,6.2))+
+  xlab("\n tenure (days)") +
+  ylab("reproductive success\n") +
+  theme(legend.position="right",
+        plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+egg_tenure_plot
+```
+
+### Fig: ODBA and reproductive success
+
+```{r Reproductive success and odba model}
+success_m4 <- glmmTMB(n_eggs ~ scale(mean_ODBA) + scale(log(tenure_days)) + scale(arrival_day),
+                  data=ind_fertile_activity,
+                  # data=ind_fertile_activity %>% filter(likely_extra_nests=="less likely"),
+                  family=nbinom2)
+summary(success_m4)
+
+simulationOutput <- simulateResiduals(fittedModel = success_m3, plot=F)
+plot(simulationOutput)
+```
+
+Similar effects when males near predated nests excluded.
+
+```{r}
+success_m4_flex <- as_flextable(success_m4)
+if(save_tables==TRUE){
+save_as_docx(success_m4_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/odba_reproduction_model.docx"))
+}
+```
+
+```{r}
+m4_effects = effects::allEffects(success_m4, xlevels = 100)
+m4_active_eff = m4_effects$`scale(mean_ODBA)` %>% data.frame
+m4_tenure_eff = m4_effects$`scale(log(tenure_days))` %>% data.frame
+```
+
+```{r}
+plot(m4_effects)
+```
+
+```{r fig.width=2, fig.height=2.4}
+egg_odba_plot <- ggplot(ind_fertile_activity)+
+  geom_line(data = m4_active_eff,
+            aes(y = fit, x = mean_ODBA),
+            colour=col_scale[2]) +
+  geom_ribbon(data = m4_active_eff,
+              aes(y = fit, x = mean_ODBA, ymin = lower, ymax = upper),
+              alpha = 0.2, fill=col_scale[2])+
+  geom_jitter(aes(x=mean_ODBA, y=n_eggs, shape=likely_extra_nests),
+             fill=male_colour,
+             colour=male_colour,
+             size=point_size,
+             alpha=point_alpha,
+             width=0.005, height=0.15) +
+  theme_classic()+
+  scale_shape_manual(values=c(default_shape, default_shape), guide="none")+
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0,0.5,by=0.1))) +
+  coord_cartesian(xlim=c(0.1,0.52), ylim=c(0,6.2))+
+  xlab("\n mean ODBA (g)") +
+  ylab("reproductive success\n")+
+  theme(legend.position="right",
+        plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size))
+
+egg_odba_plot
+```
+
+## Combined figure: Mating success and behaviour
+
+```{r fig.height=2.5, fig.width=6.4}
+fig3 <- success_active_plot +
+  success_tenure_plot + ylab("\n") +
+  success_odba_plot + ylab("\n") +
+  plot_layout(nrow = 1,
+              widths=c(1,1.05,1.05),
+              heights=c(1))+
+  plot_annotation(tag_levels = 'a',
+                  tag_prefix = '(',
+                  tag_suffix = ')') &
+  theme(plot.tag = element_text(size=label.size, family = font.family, face="italic"),
+        plot.tag.position = c(.3, .96))
+
+fig3
+```
+
+```{r}
+if(save_plots==TRUE){
+ggsave(plot=fig3,
+       filename='figure3-beh-mating-success.jpg',
+       path=output_path,
+       width=16,
+       height=7,
+       units="cm",
+       dpi=300)
+}
+```
+
+## Combined supplementary figure: Reproductive success and behaviour
+
+```{r fig.height=2.5, fig.width=6.4}
+supfigsuccess <- egg_active_plot +
+  egg_tenure_plot + ylab("\n") +
+  egg_odba_plot + ylab("\n") +
+  plot_layout(nrow = 1,
+              widths=c(1,1.05,1.05),
+              heights=c(1))+
+  plot_annotation(tag_levels = 'a',
+                  tag_prefix = '(',
+                  tag_suffix = ')') &
+  theme(plot.tag = element_text(size=label.size, family = font.family, face="italic"),
+        plot.tag.position = c(.3, .96))
+
+supfigsuccess
+```
+
+```{r}
+if(save_plots==TRUE){
+ggsave(plot=supfigsuccess,
+       filename='figure-rsuccess.jpg',
+       path=output_path,
+       width=16,
+       height=7,
+       units="cm",
+       dpi=300)
+}
+```
+
+```{r}
+rm(m1_active_eff, m1_active_eff2, m1_effects, m1_effects2, m1_tenure_eff,
+   m2_active_eff, m2_effects, m2_tenure_eff,
+   m3_active_eff, m3_effects, m3_tenure_eff, 
+   m4_active_eff, m4_effects, m4_tenure_eff,
+   success_m1, success_m1_flex, 
+   success_m2, success_m2_flex, 
+   success_m3, success_m3_flex,
+   success_m4, success_m4_flex,
+   success_mt, success_mt_flex)
+```
+
+
+# Q: Does activity relative to competitors predict success at a given nest?
+
+For this analysis, we don't want to limit the dataset just to males with at least 2 days of data.
+
+But we do want to exclude nests that were predated before genotyping. 
+
+Median daily distance from the nest site tended to be within 200 metres (in 14/18 cases).
+
+```{r Subset male and nest data for modelling}
+nest_male_date_sub <- nest_male_date %>%
+  filter(!nest %in% predated_nests$nest) %>%
+  mutate(dist_m=as.numeric(dist_m),
+         success=as.integer(success)) %>%
+  select(nest, date, bird_ID, colour_combo, mean_ODBA, prop_activity, dist_m, success) %>%
+  filter(dist_m <= 200) %>% 
+  group_by(date, nest) %>% 
+  mutate(z_prop_act = scale(prop_activity),
+         z_ODBA = scale(mean_ODBA)) %>%
+  filter(!is.na(z_prop_act)) %>%
+  as.data.frame()
+```
+
+```{r Check sample size per day}
+nest_date_n <- nest_male_date_sub %>%
+  group_by(nest, date) %>%
+  summarise(n=n()) %>%
+  arrange(n)
+
+hist(nest_date_n$n, breaks=20)
+```
+
+```{r}
+median(nest_date_n$n)
+mean(nest_date_n$n)
+sd(nest_date_n$n)
+```
+
+```{r}
+cor(nest_male_date_sub$z_prop_act, nest_male_date_sub$dist_m)
+cor(nest_male_date_sub$prop_activity, nest_male_date_sub$dist_m)
+cor(nest_male_date_sub$mean_ODBA, nest_male_date_sub$dist_m)
+```
+
+```{r}
+plot(nest_male_date_sub$dist_m, nest_male_date_sub$z_prop_act)
+```
+
+```{r Nest male model with scaled activity}
+nest_male_m <- glmmTMB(success ~ scale(z_prop_act) + 
+                         (1|bird_ID) +
+                         (1|nest),
+                       data = nest_male_date_sub,
+                       family = binomial())
+
+summary(nest_male_m)
+
+simulationOutput <- simulateResiduals(fittedModel = nest_male_m, plot=F)
+plot(simulationOutput)
+testZeroInflation(simulationOutput)
+testDispersion(simulationOutput)
+
+nm_rel_effects <- confint(nest_male_m)
+nm_rel_effects <- cbind(name=rownames(nm_rel_effects), 
+                        data.frame(nm_rel_effects,
+                                   row.names=NULL)) %>%
+  rename(`2.5`=`X2.5..`,
+         `97.5`=`X97.5..`,
+         estimate=Estimate) %>%
+  mutate(effect_type="rel")
+```
+
+
+```{r}
+if(save_tables==TRUE){
+nest_m_flex <- as_flextable(nest_male_m)
+save_as_docx(nest_m_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/scaled_nest_male_model.docx"))
+}
+```
+
+## Fig: Activity relative to competitors
+
+```{r}
+nest_male_plotdat <- rbind(nest_male_date_sub %>% mutate(plot_type="box"), 
+                              nest_male_date_sub %>% mutate(plot_type="point"))
+
+nest_male_plotdat$plot_factor <- factor(
+  paste0("s", nest_male_plotdat$success, "-", nest_male_plotdat$plot_type),
+  levels = c("s0-point", "s0-box", "s1-box", "s1-point"))
+
+nest_male_boxplot <- ggplot() +
+  theme_classic()+
+    geom_point(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s0-point"),
+               aes(x = plot_factor,
+                   y = z_prop_act),
+             size=small.point.size,
+             alpha=point_alpha,
+             shape=default_shape,
+             fill=male_colour,
+             position=position_jitter(w=0.08, h=0, seed = 1),
+             ) +
+  geom_boxplot(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s0-box"),
+               aes(x = plot_factor,
+                   y = z_prop_act),
+               outlier.shape=default_shape,
+               fill="white",
+               width=0.7) +
+  geom_boxplot(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s1-box"),
+               aes(x = plot_factor,
+                   y = z_prop_act),
+               outlier.shape=default_shape,
+               fill="white",
+               width=0.7)+
+  geom_point(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s1-point"),
+               aes(x = plot_factor,
+                   y = z_prop_act),
+             size=small.point.size,
+             alpha=point_alpha,
+             shape=default_shape,
+             fill=male_colour,
+             position=position_jitter(w=0.08, h=0, seed = 1),
+             ) +
+  coord_cartesian(ylim=c(-2.8,2.8))+
+  scale_y_continuous(breaks=c(seq(-2,2,by=1)),
+                     expand=c(0,0))+
+  scale_x_discrete(breaks = c("s0-point", "s1-point"),
+                   labels = c("unsuccessful", "successful"))+
+  xlab("\n mating success")+
+  ylab("male activity\n (scaled relative to local males)\n")+
+  theme(text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        legend.position="right",
+        legend.justification="top",
+        legend.background = element_blank(),
+        legend.box.background = element_rect(colour = "grey"))
+
+nest_male_boxplot
+```
+
+```{r}
+if(save_plots==TRUE){
+ggsave(plot=nest_male_boxplot,
+       filename='figure4-relative-male-activity.jpg',
+       path=output_path,
+       width=14,
+       height=7,
+       units="cm",
+       dpi=300)
+}
+```
+
+# Q: How repeatable is activity during the fertile period?
+
+```{r Analyse repeatability of male activity during the fertile period}
+repeat_lme <- lmer(prop_activity ~ (1|bird_ID),
+                      data = daily_activity %>% filter(breeding_stage=="fertile"))
+
+summary(repeat_lme)
+
+simulationOutput <- simulateResiduals(fittedModel = repeat_lme, plot=F)
+testDispersion(simulationOutput)
+
+# Get variance
+vc = VarCorr(repeat_lme)
+withingroup_var=attr(vc, 'sc')[1]^2
+betweengroup_var=attr(vc$bird_ID, 'stddev')[1]^2
+
+# repeatability
+R = betweengroup_var/(betweengroup_var+withingroup_var)
+R
+```
+Within-individual repeatability of daily activity during the fertile phase was R = `r R`.
