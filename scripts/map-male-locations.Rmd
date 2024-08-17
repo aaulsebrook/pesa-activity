@@ -1,0 +1,193 @@
+---
+title: 'Map male locations'
+author: Anne Aulsebrook
+output: 
+  rmdformats::robobook:
+    code_folding: hide
+    toc_depth: 2
+---
+
+# Background
+
+*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
+
+*Repository*: https://github.com/aaulsebrook/pesa-activity
+
+*Purpose*: This notebook is used to explore male pectoral sandpiper locations and detect when males were away from the study area for extended periods. Data collected when males are away from the study area are excluded from further analyses.
+
+*Inputs*: Data inputs are found in "data".
+
+*Outputs*: A summary of longer trips away from the site is exported to "data/male-trips-offsite.csv"
+
+```{r Set up workspace, message=FALSE, results=FALSE}
+library(sf) # for spatial data
+library(dplyr)
+library(lubridate) # for time functions
+library(here)
+library(geosphere)
+library(mapview)
+library(flextable)
+
+csv_output = here("outputs", "processed-data")
+
+if (!dir.exists(csv_output)) {
+  dir.create(csv_output)
+}
+
+source("./general-helper-functions.R")
+
+CRSdefault <- 4326
+```
+
+# Prepare data
+
+```{r Import data}
+captures <- read.csv(here("data","capture-data.csv"))
+gps <- read.csv(here("data","gps-data.csv")) %>%
+  filter(lat!=200 & lon!=200) %>% # these are readings when no GPS signal available
+  mutate(datetime=local_dt_to_posix(as.character(datetime)))
+
+captures <- captures %>%
+  mutate(date=local_date_to_posix(as.character(date)),
+         released_dt = local_dt_to_posix(paste(date,released)))
+```
+
+```{r Extract tagged males from capture data, message=FALSE, results=FALSE}
+tagged_males <- captures %>%
+  filter(tag_action=="on") %>% 
+  filter(!colour_combo %in% colour_combos_to_exclude) %>%
+  select(colour_combo, bird_ID, tag_ID, date, released_dt, body_mass)
+```
+
+```{r Get location data when data logger is on male}
+male_locations <- left_join(gps, tagged_males, 
+                            join_by('tag_ID')) %>%
+  rename(capture_date=date)
+
+male_locations <- male_locations %>%
+  filter(datetime>released_dt)
+```
+
+For each male GPS location, I have used the geosphere package (distGeo default) to calculate the distance from the approximate "centre" of our study plot (71.319, -156.656). 
+
+```{r Add distance from centre of study plot}
+male_locations <- male_locations %>%
+  mutate(m_from_study_centre = distm(cbind(lon, lat),
+                                       cbind(-156.656, 71.319)))
+
+male_locations <- male_locations %>%
+  mutate(km_from_study_centre = as.numeric(m_from_study_centre/1000)) %>%
+  select(!m_from_study_centre)
+```
+
+# Examine male trips outside the study area
+
+The study site is approximately 2km^2. Below, any locations more than 3km from the centre of the site (i.e. approximately 2km away from the site) are considered outside the study area.  
+
+```{r Set limit for being considered on site}
+site_distance_limit = 3 #km
+```
+
+```{r Summarise times when males are off site, message=FALSE}
+male_locations <- male_locations %>%
+  arrange(colour_combo, datetime) %>%
+  mutate(on_site = case_when(km_from_study_centre> site_distance_limit ~ "off",
+                             TRUE ~ "on"),
+         site_change = case_when(lag(on_site)!=on_site ~ 1,
+                                 TRUE ~ 0))
+
+male_locations$location_chunk = cumsum(male_locations$site_change)
+# Note: this isn't taking into account different birds, so we need to take that into account below
+
+# Summarise trips away from site
+male_location_summary <- male_locations %>%
+  group_by(colour_combo, bird_ID, tag_ID, location_chunk, on_site) %>%
+  summarise(start_dt_local=min(datetime),
+            end_dt_local=max(datetime),
+            duration_hrs=as.numeric(difftime(end_dt_local, 
+                                             start_dt_local, 
+                                             units="hours")),
+            min_km_from_study_centre=min(km_from_study_centre),
+            max_km_from_study_centre=max(km_from_study_centre),
+            min_elevation=min(ele),
+            max_elevation=max(ele),
+            n_samples=n()) %>%
+  filter(n_samples>1) # a single sample at or away from the site could just be an error; ignore
+
+long_trips_offsite <- male_location_summary %>% 
+  filter(on_site=="off" & duration_hrs>24)
+
+long_trips_offsite %>% flextable()
+```
+
+The table above shows a list of all trips "offsite" that were more than 24 hours in duration. Data collected during these periods will not be included in further analyses.
+
+```{r Save tables}
+write.csv(long_trips_offsite, 
+          file=paste0(csv_output,"male-trips-offsite.csv"))
+```
+
+The map below shows all of these trips "offsite". The approximate study area (1000 m radius from the centre of the site) is shaded.
+
+```{r Get trip data}
+datalist = list()
+
+for (i in 1:nrow(long_trips_offsite)) {
+  this_bird = long_trips_offsite$bird_ID[i]
+  this_start = long_trips_offsite$start_dt_local[i]
+  this_end = long_trips_offsite$end_dt_local[i]
+  this_dat = male_locations %>%
+    filter(bird_ID==this_bird &
+             datetime>=this_start &
+             datetime<=this_end)
+  datalist[[i]] <- this_dat
+}
+
+long_trip_locations <- bind_rows(datalist)
+
+long_trip_locations <- st_as_sf(long_trip_locations, coords=c("lon","lat"), crs=CRSdefault)
+```
+
+```{r Define study location}
+study_site_buffer <- data.frame(lat = 71.319, lon = -156.656) |> st_as_sf(coords = c("lon", "lat"), crs=CRSdefault) |>
+  st_buffer(1000)
+```
+
+```{r Map trip data}
+mapview(long_trip_locations, zcol = "colour_combo") +
+  mapview(study_site_buffer)
+```
+
+But are there other trips offsite that we're missing?
+
+The map below shows other trips offsite that aren't being included in the map above, for which there was more than one datapoint.
+
+```{r Get locations from shorter trips}
+short_trips_offsite <- male_location_summary %>% 
+  filter(on_site=="off" & duration_hrs <= 24)
+
+datalist = list()
+
+for (i in 1:nrow(short_trips_offsite)) {
+  this_bird = short_trips_offsite$bird_ID[i]
+  this_start = short_trips_offsite$start_dt_local[i]
+  this_end = short_trips_offsite$end_dt_local[i]
+  this_dat = male_locations %>%
+    filter(bird_ID==this_bird &
+             datetime>=this_start &
+             datetime<=this_end)
+  datalist[[i]] <- this_dat
+}
+
+short_trip_locations <- bind_rows(datalist)
+
+short_trip_locations <- st_as_sf(short_trip_locations, coords=c("lon","lat"), crs=CRSdefault)
+```
+
+```{r Map shorter trips}
+mapview(short_trip_locations, zcol = "colour_combo") +
+  mapview(study_site_buffer)
+```
+
+There is one case where a male (R,Y,DB) travels more than 150 km from the site over the ocean and back in a single day. Data collected during this trip will also be excluded from analyses. This trip occurred on 20 June.
+
