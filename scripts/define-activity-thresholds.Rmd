@@ -70,10 +70,15 @@ set_flextable_defaults(
 window_length = 10 # 1 or 10 (in minutes)
 data_type = "onboard" # rawbased or onboard
 
-path_output = here("outputs", "activity-threshold-outputs")
+plot_output = here("outputs", "activity-threshold-outputs")
+csv_output = here("outputs", "processed-data")
 
-if (!dir.exists(path_output)) {
-  dir.create(path_output)
+if (!dir.exists(plot_output)) {
+  dir.create(plot_output)
+}
+
+if (!dir.exists(csv_output)) {
+  dir.create(csv_output)
 }
 ```
 
@@ -505,8 +510,8 @@ thresholds <- threshold_results %>%
   left_join(., focal_males, by='colour_combo') %>%
   rename(activity_threshold=glue('{thresh_method}'))
 
-if (!dir.exists(glue("{path_output}/plots"))) {
-  dir.create(glue("{path_output}/plots"))
+if (!dir.exists(glue("{plot_output}/plots"))) {
+  dir.create(glue("{plot_output}/plots"))
 }
   
 for(i in 1:nrow(thresholds)) {
@@ -532,7 +537,7 @@ for(i in 1:nrow(thresholds)) {
           
   ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -710,7 +715,7 @@ for(i in 1:nrow(thresholds)) {
           
      ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -861,7 +866,7 @@ for(i in 1:nrow(revised_thresholds)) {
           
      ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -922,7 +927,7 @@ for(i in 1:nrow(revised_thresholds)) {
           
      ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -1037,7 +1042,7 @@ for(i in 1:nrow(revised_thresholds)) {
           
      ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -1093,7 +1098,7 @@ for(i in 1:nrow(revised_thresholds)) {
           
      ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -1204,7 +1209,7 @@ for(i in 1:nrow(revised_thresholds)) {
           
      ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -1256,7 +1261,7 @@ for(i in 1:nrow(revised_thresholds)) {
           
      ggsave(filename=paste0(this_tag_id, "_activity_threshold.png"),
             plot=dist_plot,
-            path=here(path_output,"plots"),
+            path=here(plot_output,"plots"),
             device="png",
             width=18,
             height=11,
@@ -1317,6 +1322,6 @@ odba_thresholds <- full_join(odba, thresholds, join_by('tag_ID')) %>%
   rename(n_windows_threshold = n_windows)
 
 write.csv(odba_thresholds,
-          file=here(path_output, glue("ODBA-and-activity_{window_length}min-intervals_onboard.csv")),
+          file=here(csv_output, glue("ODBA-and-activity_{window_length}min-intervals_onboard.csv")),
           row.names=FALSE)
 ```
