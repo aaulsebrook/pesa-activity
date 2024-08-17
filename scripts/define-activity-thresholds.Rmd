@@ -41,7 +41,6 @@ library(remotes)
 remotes::install_github("mpio-be/accr") # used for some odba threshold functions
 ```
 
-
 ```{r Prepare workspace, message=FALSE, results=FALSE}
 library(dplyr) # for data manipulation
 library(ggplot2) # for plotting
@@ -231,7 +230,7 @@ check_active %>%
 
 Our lowest outlier for activity is where the bird was only moving around on the ground. So again, this is not so surprising. 
 
-A side note: Median ODBA is probably better than mean ODBA for estimating majority behaviour (less skew from very high/low values). But since Druid provided on-board processing of mean values, and around half the raw data was not transmitted properly, we are focusing on means.
+A side note: Median ODBA is probably better than mean ODBA for estimating majority behaviour (less skew from very high/low values). But since the devices provided on-board processing of mean values, and around half the raw data were not transmitted properly, we are focusing on means.
 
 ## Plot labelled data
 
@@ -269,7 +268,7 @@ focal_males %>% flextable()
 There are a few ways to resolve this problem:
 
 1. Look at overall accuracy, without grouping by individual
-2. Check whether there are more data available from the Druid data for these videos (as opposed to the raw data): <i> there aren't </i>
+2. Check whether there are more on-board processed data available for these videos (as opposed to the raw data): <i> there aren't </i>
 
 So we go with option 1.
 
@@ -288,7 +287,7 @@ focal_wins %>%
 
 We are defining activity thresholds separately for each individual bird, based on the distribution of their ODBA values.
 
-In a separate series of scripts, I have 'cleaned' the 10-min Druid ODBA data (clean-druid-odba-data.R) to exclude duplicates, overlapping windows, specific birds (1 hour recording and bird that died), and times when the tag was not on the bird.
+In a separate script, I have 'cleaned' the 10-min Druid ODBA data (clean-druid-odba-data.R) to exclude duplicates, overlapping windows, specific birds (1 hour recording and bird that died), and times when the tag was not on the bird.
 
 The method we are using to fit distributions to the data is DistributionOptimization. This approach was recently published in Scientific Reports (Lerch et al. 2020; https://doi.org/10.1038/s41598-020-57432-w). It uses an evolutionary algorithm to fit Gaussian mixture models. It is somewhat more complex and slower to run than methods like MixFit, but it sometimes performs better than MixFit (particularly for odd or unusual cases).
 
@@ -377,7 +376,7 @@ I originally expected there to be 2 or 3 distributions or modes in the data (the
 
 Data are log-transformed, then fitted with normal distributions. I also tried using untransformed data and setting 'lnorm' as the family type, but performance was worse (results not shown).
 
-I also tried using MixFit, but DistOpt performed better in some cases, so stuck with DistOpt.However, note that DistOpt can be slow to run.
+I also tried using MixFit, but DistOpt performed better in some cases, so stuck with DistOpt. However, note that DistOpt can be slow to run.
 
 ```{r Determine thresholds using all methods, message=FALSE}
 # Automatically uses up to 10 cores
@@ -463,7 +462,7 @@ threshold_accuracy %>%
   arrange(desc(accuracy))
 ```
 
-By far the best method appears to use the second of 3 modes. This makes sense to me - the model tends to divide "rest" into two modes, and then the separation between the second and third mode is our activity threshold. Higher recall than precision indicates that we will probably tend to slightly underestimate activity using this method, although we 
+The best method appears to use the second of 3 modes. This makes sense to me - the model tends to divide "rest" into two modes, and then the separation between the second and third mode is our activity threshold.
 
 ## Visualise thresholds
 
@@ -652,7 +651,6 @@ results <- foreach(i = 1:nrow(thresholds),
       separations = get_separations(dat, method="distopt", ncomp=3)
       threshold_values = separations$thresh %>%
         mutate(tag_ID=this_tag_id,
-               filename=this_file,
                n_windows=n_windows,
                .before=1) 
       fit = cbind(data.frame(tag_ID=this_tag_id,
@@ -685,7 +683,6 @@ thresholds = all_thresholds %>%
 for(i in 1:nrow(thresholds)) {
     
     this_tag_id = thresholds$tag_ID[i]
-    this_file = thresholds$filename[i]
     these_thresholds = all_thresholds |>
       filter(tag_ID==this_tag_id)
     n_windows = thresholds$n_windows[i]
@@ -724,25 +721,25 @@ for(i in 1:nrow(thresholds)) {
 }
 ```
 
-Any thresholds that appear very unusual for the distribution (i.e. are far above or below the second peak), or that appear slightly unusual and are not within the expected range (250-350), are being re-attempted. These are:
+Any thresholds that appear very unusual for the distribution (i.e. are far above or below the second peak), or that appear slightly unusual and are not within the expected range (0.25-0.35), are being re-attempted. These are:
 
-* Tag 020a (184, low but just before second peak)?
+* Tag 020a (low but just before second peak)?
 * Tag 021a (one of the focal birds, but threshold appears a little low)
-* Tag 022b (212, low but just before second peak)
-* Tag 025b (166 but just before second peak)
-* Tag 025e (256, maybe a little low)
+* Tag 022b (low but just before second peak)
+* Tag 025b (but just before second peak)
+* Tag 025e (maybe a little low)
 * Tag 026c: Threshold much too high. Try different seed?
-* Tag 0214 (147, just below second peak)
-* Tag 0220: (450) Threshold appears too high; either use first or try a different seed
+* Tag 0214 (just below second peak)
+* Tag 0220: Threshold appears too high; either use first or try a different seed
 * Tag 0244: Threshold too high (439)
 * Tag 0246: Threshold too high. 
-* Tag 0248 (197, appears low-ish)
+* Tag 0248 (appears low-ish)
 * Tag 0254: Threshold too low
-* Tag 0265 (191, low but just before second peak)
+* Tag 0265 (low but just before second peak)
 * Tag 0267: Threshold too high
-* Tag 0269 (151, low but just before second peak)
+* Tag 0269 (low but just before second peak)
 
-Appears to be too little data for:
+There appears to be too little data to define a threshold for:
 
 * Tag 022a (20 hours)
 * Tag 0226 (12 hours)
@@ -753,7 +750,7 @@ Appears to be too little data for:
 
 ## Revise thresholds by changing seed number
 
-In general, it seems like we tend to have issues when we have less than 36 hours (1.5 days) of data from an individual. These individuals will probably need to be excluded (n=15 out of 100).
+In general, it seems like we tend to have issues when we have less than 36 hours (1.5 days) of data from an individual. We probably cannot use activity thresholds for these individuals (n=15 out of 100).
 
 ```{r Add comment}
 thresholds <- thresholds %>%
@@ -807,7 +804,6 @@ revised_results <- foreach(i = 1:nrow(thresholds_to_revise),
       separations = get_separations(dat, method="distopt", ncomp=3, seed_number = 21)
       threshold_values = separations$thresh %>%
         mutate(tag_ID=this_tag_id,
-               filename=this_file,
                n_windows=n_windows,
                .before=1) 
       fit = cbind(data.frame(tag_ID=this_tag_id,
@@ -838,7 +834,6 @@ revised_thresholds = all_revised_thresholds %>%
 for(i in 1:nrow(revised_thresholds)) {
     
     this_tag_id = revised_thresholds$tag_ID[i]
-    this_file = revised_thresholds$filename[i]
     these_thresholds = all_revised_thresholds |>
       filter(tag_ID==this_tag_id)
     n_windows = revised_thresholds$n_windows[i]
@@ -877,16 +872,16 @@ for(i in 1:nrow(revised_thresholds)) {
 }
 ```
 
-Tags with thresholds that now look ok / consistent enough to keep:
+Tags with thresholds that now look ok / consistent enough to use:
 
-* Tag 020a (184, low but just before second peak) - slightly improved
+* Tag 020a (low but just before second peak) - slightly improved
 * Tag 021a (one of the focal birds) - improved
-* Tag 025b (166 but just before second peak) - improved
-* Tag 025e (256, maybe a little low) - slightly improved but very similar
+* Tag 025b (but just before second peak) - improved
+* Tag 025e (maybe a little low) - slightly improved but very similar
 * Tag 026c: Now looks good
-* Tag 0248 (197, appears low-ish) - improved, looks good (277)
-* Tag 0265 (191, low but just before second peak) - improved, looks good
-* Tag 0269 (151, low but just before second peak) - improved, looks ok enough
+* Tag 0248 (appears low-ish) - improved, looks good
+* Tag 0265 (low but just before second peak) - improved, looks good
+* Tag 0269 (low but just before second peak) - improved, looks ok enough
 
 ```{r Alter thresholds}
 revised_thresholds <- revised_thresholds %>%
@@ -900,7 +895,6 @@ thresholds[match(revised_thresholds$tag_ID, thresholds$tag_ID), ] <- revised_thr
 for(i in 1:nrow(revised_thresholds)) {
     
     this_tag_id = revised_thresholds$tag_ID[i]
-    this_file = revised_thresholds$filename[i]
     these_thresholds = all_revised_thresholds |>
       filter(tag_ID==this_tag_id)
     n_windows = revised_thresholds$n_windows[i]
@@ -937,12 +931,12 @@ for(i in 1:nrow(revised_thresholds)) {
 }
 ```
 
-Tags that still need revising:
+Thresholds that still need revising:
 
-* Tag 0214 (147, just below second peak) - same
-* Tag 0220: (450) Still too high
-* Tag 022b (212, low but just before second peak) - same
-* Tag 0244: Threshold too high (439)
+* Tag 0214 (just below second peak) - same
+* Tag 0220: Still too high
+* Tag 022b (low but just before second peak) - same
+* Tag 0244: Threshold too high
 * Tag 0246: Threshold too high. 
 * Tag 0254: Threshold too low - now looks too high?
 * Tag 0267: Threshold too high
@@ -986,7 +980,6 @@ revised_results <- foreach(i = 1:nrow(thresholds_to_revise),
       separations = get_separations(dat, method="distopt", ncomp=3, seed_number = 41)
       threshold_values = separations$thresh %>%
         mutate(tag_ID=this_tag_id,
-               filename=this_file,
                n_windows=n_windows,
                .before=1) 
       fit = cbind(data.frame(tag_ID=this_tag_id,
@@ -1017,7 +1010,6 @@ revised_thresholds = all_revised_thresholds %>%
 for(i in 1:nrow(revised_thresholds)) {
     
     this_tag_id = revised_thresholds$tag_ID[i]
-    this_file = revised_thresholds$filename[i]
     these_thresholds = all_revised_thresholds |>
       filter(tag_ID==this_tag_id)
     n_windows = revised_thresholds$n_windows[i]
@@ -1058,9 +1050,9 @@ for(i in 1:nrow(revised_thresholds)) {
 
 Tags with thresholds that are now good:
 
-* Tag 0244: Threshold too high (439) - worse, even higher - improved, looks good (196)
-* Tag 0246: Threshold still too high (was 476, now 414) - improved, looks ok (297)
-* Tag 0254: Threshold too low, then too high - looks great now (221)
+* Tag 0244: Threshold was too high - then worse, even higher - now improved, looks good
+* Tag 0246: Threshold was too high - now improved, looks ok
+* Tag 0254: Threshold was too low, then too high - looks great now
 
 ```{r Alter thresholds from third seed number}
 revised_thresholds <- revised_thresholds %>%
@@ -1074,7 +1066,6 @@ thresholds[match(revised_thresholds$tag_ID, thresholds$tag_ID), ] <- revised_thr
 for(i in 1:nrow(revised_thresholds)) {
     
     this_tag_id = revised_thresholds$tag_ID[i]
-    this_file = revised_thresholds$filename[i]
     these_thresholds = all_revised_thresholds |>
       filter(tag_ID==this_tag_id)
     n_windows = revised_thresholds$n_windows[i]
@@ -1113,15 +1104,15 @@ for(i in 1:nrow(revised_thresholds)) {
 
 ## Revise thresholds using other methods
 
-Tags with other thresholds that we can use:
+Tags where we should perhaps just keep the original threshold:
 
-* Tag 0214 (147, just below second peak) - much the same; keep original (no action needed)
+* Tag 0214 (just below second peak) - much the same; keep original (no action needed)
 
 Tags for other methods:
 
-* Tag 0220: (450) - too high still. Might work better to use four modes for this one: lots of high values (i.e. flying)
-* Tag 022b (212, low but just before second peak) - Might work better to use four modes for this one (i.e. flying)
-* Tag 0267: Threshold too high - still too high (371) Might work better to use four modes for this one (i.e. flying)
+* Tag 0220: - too high still. Might work better to use four modes for this one: lots of high values (i.e. flying)
+* Tag 022b (low but just before second peak). Might work better to use four modes for this one.
+* Tag 0267: Threshold too high - still too high. Might work better to use four modes for this one.
 
 ```{r List tags to revise with 4 modes}
 tags_to_revise <- c('0220',
@@ -1156,7 +1147,6 @@ revised_results <- foreach(i = 1:nrow(thresholds_to_revise),
       separations = get_separations(dat, method="distopt", ncomp=4, seed_number = 41)
       threshold_values = separations$thresh %>%
         mutate(tag_ID=this_tag_id,
-               filename=this_file,
                n_windows=n_windows,
                .before=1) 
       fit = cbind(data.frame(tag_ID=this_tag_id,
@@ -1187,7 +1177,6 @@ revised_thresholds = all_revised_thresholds %>%
 for(i in 1:nrow(revised_thresholds)) {
     
     this_tag_id = revised_thresholds$tag_ID[i]
-    this_file = revised_thresholds$filename[i]
     these_thresholds = all_revised_thresholds |>
       filter(tag_ID==this_tag_id)
     n_windows = revised_thresholds$n_windows[i]
@@ -1240,7 +1229,6 @@ thresholds[match(revised_thresholds$tag_ID, thresholds$tag_ID), ] <- revised_thr
 for(i in 1:nrow(revised_thresholds)) {
     
     this_tag_id = revised_thresholds$tag_ID[i]
-    this_file = revised_thresholds$filename[i]
     these_thresholds = all_revised_thresholds |>
       filter(tag_ID==this_tag_id)
     n_windows = revised_thresholds$n_windows[i]
@@ -1288,6 +1276,8 @@ thresholds %>%
 ```
 
 ## Re-assess accuracy for focal birds
+
+When using the method above, some thresholds were revised based on visualisation of the data. This included some birds that were previously used to assess the accuracy of this method. Rather than using the unadjusted threshold values for these focal birds, it makes more sense to use the adjusted values. I did not check or remember which birds were focal birds when I was adjusting the thresholds (but did go back and make a note on this later).
 
 ```{r Combine revised results with windowed data}
 focal_wins <- focal_wins %>%
