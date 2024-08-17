@@ -124,7 +124,7 @@ The table above shows a list of all trips "offsite" that were more than 24 hours
 
 ```{r Save tables}
 write.csv(long_trips_offsite, 
-          file=paste0(csv_output,"male-trips-offsite.csv"))
+          file=paste0(csv_output,"/male-trips-offsite.csv"))
 ```
 
 The map below shows all of these trips "offsite". The approximate study area (1000 m radius from the centre of the site) is shaded.
