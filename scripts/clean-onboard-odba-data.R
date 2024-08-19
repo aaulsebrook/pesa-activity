@@ -1,5 +1,6 @@
 # ~~~~~ SCRIPT OVERVIEW --------------------------------------------------------
-
+#' This script accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
+#'
 #' Purpose: 
 #' This script cleans ODBA data collected on-board DEBUT NANO (Druid Technology)
 #' data loggers, ready for analysis. 
@@ -9,17 +10,17 @@
 #' github.com/aaulsebrook/pesa_activity
 #'
 #' Inputs:
-#' - Raw ODBA data (PESA database)
-#' - Capture records (PESA database)
+#' - Raw ODBA data (odba-data; csv)
+#' - Capture records (capture-data; csv)
 #' 
 #' Outputs:
-#' - Cleaned ODBA data (mean_ODBA; csv)
+#' - Cleaned ODBA data (mean_ODBA_10min-intervals_onboard; csv)
 #'
 #' Overview:
 #' In this script, the following functions are performed on raw ODBA data:
 #' 1. Tidying of column names
 #' 2. Exclusion of duplicate data (same values for same timestamp)
-#' 3. Exclusion of overlapping timestamps (overlap of >10% between 10min intervals)
+#' 3. Exclusion of data intervals with high overlap with other data intervals
 #' 4. Exclusion of specific birds (trial recording, bird that was predated)
 #' 5. Exclude data when tag not on bird
 #' 6. Convert units to g
@@ -46,6 +47,10 @@ captures <- read.csv(here("data","capture-data.csv"))
 # ---- Set output directory
 output_dir <- here("outputs","processed-data")
 
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir)
+}
+
 # ---- Define parameters ----
 window_length = 10 # window length in minutes
 
@@ -53,7 +58,7 @@ window_length = 10 # window length in minutes
 odba <- unique(all_odba, by=c("tag_ID","window_end_utc","mean_ODBA"))
 
 # ~~~~~ EXCLUDE OVERLAPPING INTERVALS ------------------------------------------
-accepted_overlap_secs = window_length*0.1*60 # 10% overlap with previous window
+accepted_overlap_secs = window_length*0.4*60 # 40% overlap with previous window
 
 odba <- odba %>%
   arrange(tag_ID, window_end_utc) %>%
@@ -62,7 +67,7 @@ odba <- odba %>%
 odba$latency <- c(0,diff(odba$window_end_utc))
 
 clean_odba <- odba %>%
-  filter(latency>=window_length*60-accepted_overlap_secs | tag_ID==prev_tag)
+  filter(latency>=window_length*60-accepted_overlap_secs | tag_ID!=prev_tag)
 
 # ~~~~~ EXCLUDE SPECIFIC BIRDS -------------------------------------------------
 

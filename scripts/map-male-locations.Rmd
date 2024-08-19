@@ -15,9 +15,9 @@ output:
 
 *Purpose*: This notebook is used to explore male pectoral sandpiper locations and detect when males were away from the study area for extended periods. Data collected when males are away from the study area are excluded from further analyses.
 
-*Inputs*: Data inputs are found in "data".
+*Inputs*: Capture data ("capture-data.csv") and GPS data ("gps-data.csv")
 
-*Outputs*: A summary of longer trips away from the site is exported to "data/male-trips-offsite.csv"
+*Outputs*: A summary of longer trips away from the site is exported as "male-trips-offsite.csv"
 
 ```{r Set up workspace, message=FALSE, results=FALSE}
 library(sf) # for spatial data

@@ -9,13 +9,13 @@ output:
 
 # Background
 
-*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (2024) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
+*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
 
 *Repository*: https://github.com/aaulsebrook/
 
 *Purpose* This notebook is used to define activity thresholds for pectoral sandpipers. We recorded accelerometry from wild male pectoral sandpipers using miniature data loggers. The goal is to define whether an individual is "resting" or "active" at any given time, based on accelerometry values.  
 
-*Inputs* This notebook uses the datafile "labelled-acc-data.csv". 
+*Inputs* This notebook uses the datafiles "labelled-acc-data.csv" and "mean_ODBA_10min-intervals_onboard.csv".
 
 To obtain these data, male pectoral sandpipers fitted with accelerometers were video recorded using handheld cameras. Behaviours in videos were labelled using BORIS v 8.20.4. Behaviour labels were tidied (script: tidy-video-labels.R), synchronised with raw accelerometry (scripts: targeted-time-calibration.RmD; extract-labelled-acc.R), and summarised into either 1- or 10-minute windows, with mean overall dynamic body acceleration (ODBA) and the majority behaviour calculated for each window (script: window-labelled-odba.R). These additional processing scripts are available upon request. These methods are also described in Aulsebrook, Jacques-Hamilton and Kempenaers (2024) (https://doi.org/10.1016/j.anbehav.2023.10.013) and the scripts accompanying that manuscript are found here: https://github.com/rowanjh/behav-acc-ml
 
@@ -25,7 +25,7 @@ To obtain these data, male pectoral sandpipers fitted with accelerometers were v
 
 2. Application and visual assessment: Using the method developing in Stage 1, determine activity thresholds for all individuals. Visually confirm that the threshold for each individual fits the data distribution as expected, and make adjustments where necessary.
 
-*Outputs* Plots are saved in "outputs/activity-threshold-plots". Thresholds appended to accelerometry data are saved in "outputs/processed-data".
+*Outputs* Plots are saved in "outputs/activity-threshold-outputs/plots". Thresholds appended to accelerometry data are saved in "outputs/processed-data".
 
 # Import data and prepare workspace
 
@@ -39,6 +39,7 @@ Most packages that are used in this Notebook can be installed using the install.
 ```{r}
 library(remotes)
 remotes::install_github("mpio-be/accr") # used for some odba threshold functions
+library(accr)
 ```
 
 ```{r Prepare workspace, message=FALSE, results=FALSE}
@@ -552,7 +553,7 @@ for(i in 1:nrow(thresholds)) {
 }
 ```
 
-Visually, thresholds using 3 modes and the 2nd threshold appear reasonably sensible. Most often, the threshold falls at or just below the second peak (which also fits what we saw in the overall distribution). The average threshold is 299, which again is right in the centre of the expected range (250-350), although some thresholds are in the range of 200-250. 
+Visually, thresholds using 3 modes and the 2nd threshold appear reasonably sensible. Most often, the threshold falls at or just below the second peak (which also fits what we saw in the overall distribution). The thresholds also generally fall within the expected range of 0.25 - 0.35.
 
 ## Visualise thresholds against observations
 
@@ -728,21 +729,20 @@ for(i in 1:nrow(thresholds)) {
 
 Any thresholds that appear very unusual for the distribution (i.e. are far above or below the second peak), or that appear slightly unusual and are not within the expected range (0.25-0.35), are being re-attempted. These are:
 
-* Tag 020a (low but just before second peak)?
-* Tag 021a (one of the focal birds, but threshold appears a little low)
-* Tag 022b (low but just before second peak)
-* Tag 025b (but just before second peak)
-* Tag 025e (maybe a little low)
-* Tag 026c: Threshold much too high. Try different seed?
-* Tag 0214 (just below second peak)
-* Tag 0220: Threshold appears too high; either use first or try a different seed
-* Tag 0244: Threshold too high (439)
-* Tag 0246: Threshold too high. 
-* Tag 0248 (appears low-ish)
-* Tag 0254: Threshold too low
-* Tag 0265 (low but just before second peak)
-* Tag 0267: Threshold too high
-* Tag 0269 (low but just before second peak)
+* Tag 020a 
+* Tag 021a 
+* Tag 022b 
+* Tag 025b 
+* Tag 025e 
+* Tag 026c
+* Tag 0214 
+* Tag 0220
+* Tag 0244
+* Tag 0248
+* Tag 0254
+* Tag 0265 
+* Tag 0267
+* Tag 0269
 
 There appears to be too little data to define a threshold for:
 
@@ -752,6 +752,10 @@ There appears to be too little data to define a threshold for:
 * Tag 0222 (24 hours)
 * Tag 0232 (33 hours; value ok but just below second peak)
 * Tag 0261 (33 hours)
+
+In preliminary analysis, this tag had quite a different activity threshold, so we will repeat the analysis for this tag to check the threshold is reasonably stable:
+
+* Tag 0246
 
 ## Revise thresholds by changing seed number
 
@@ -879,14 +883,14 @@ for(i in 1:nrow(revised_thresholds)) {
 
 Tags with thresholds that now look ok / consistent enough to use:
 
-* Tag 020a (low but just before second peak) - slightly improved
-* Tag 021a (one of the focal birds) - improved
-* Tag 025b (but just before second peak) - improved
-* Tag 025e (maybe a little low) - slightly improved but very similar
-* Tag 026c: Now looks good
-* Tag 0248 (appears low-ish) - improved, looks good
-* Tag 0265 (low but just before second peak) - improved, looks good
-* Tag 0269 (low but just before second peak) - improved, looks ok enough
+* Tag 020a 
+* Tag 021a 
+* Tag 025b
+* Tag 025e 
+* Tag 026c
+* Tag 0248
+* Tag 0265
+* Tag 0269
 
 ```{r Alter thresholds}
 revised_thresholds <- revised_thresholds %>%
@@ -938,13 +942,14 @@ for(i in 1:nrow(revised_thresholds)) {
 
 Thresholds that still need revising:
 
-* Tag 0214 (just below second peak) - same
-* Tag 0220: Still too high
-* Tag 022b (low but just before second peak) - same
-* Tag 0244: Threshold too high
-* Tag 0246: Threshold too high. 
-* Tag 0254: Threshold too low - now looks too high?
-* Tag 0267: Threshold too high
+* Tag 0214 
+* Tag 0220
+* Tag 022b 
+* Tag 0244
+* Tag 0254
+* Tag 0267
+
+We will also repeat 0246 again.
 
 ## Revise thresholds by changing seed number (take two)
 
@@ -1055,9 +1060,9 @@ for(i in 1:nrow(revised_thresholds)) {
 
 Tags with thresholds that are now good:
 
-* Tag 0244: Threshold was too high - then worse, even higher - now improved, looks good
-* Tag 0246: Threshold was too high - now improved, looks ok
-* Tag 0254: Threshold was too low, then too high - looks great now
+* Tag 0244
+* Tag 0246
+* Tag 0254
 
 ```{r Alter thresholds from third seed number}
 revised_thresholds <- revised_thresholds %>%
@@ -1115,9 +1120,9 @@ Tags where we should perhaps just keep the original threshold:
 
 Tags for other methods:
 
-* Tag 0220: - too high still. Might work better to use four modes for this one: lots of high values (i.e. flying)
-* Tag 022b (low but just before second peak). Might work better to use four modes for this one.
-* Tag 0267: Threshold too high - still too high. Might work better to use four modes for this one.
+* Tag 0220: - Might work better to use four modes for this one: lots of high values (i.e. flying)
+* Tag 022b - Might work better to use four modes for this one.
+* Tag 0267 - Might work better to use four modes for this one.
 
 ```{r List tags to revise with 4 modes}
 tags_to_revise <- c('0220',
