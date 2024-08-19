@@ -2,3 +2,5 @@
 .Rhistory
 .RData
 .Ruserdata
+outputs/figures-and-tables/
+outputs/activity-threshold-outputs/
