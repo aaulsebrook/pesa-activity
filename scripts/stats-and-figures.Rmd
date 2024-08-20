@@ -1,6 +1,5 @@
 ---
 title: 'Activity in Pectoral Sandpipers: Statistics and figures'
-author: Anne Aulsebrook
 output: 
   rmdformats::robobook:
     code_folding: hide
@@ -8,10 +7,6 @@ output:
 ---
 
 # Background
-
-*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
-
-*Repository*: https://github.com/aaulsebrook/pesa-activity
 
 *Purpose*: This notebook is used to perform statistical analyses and create tables/figures that are included in the manuscript.
 
@@ -354,7 +349,7 @@ barplot_ff
 
 ## Summarise paternity data
 
-We collected blood samples from all of the males we tagged (as well as some that we didn't) and from eggs/chicks on our study plot. DNA was extracted from these samples by collaborators at the University of Alaska. These DNA samples were shipped to Seewiesen. Genotyping was performed by Sylvia and parentage was analysed by Bart. 
+We collected blood samples from all of the males we tagged (as well as some that we didn't) and from eggs/chicks on our study plot. DNA was extracted from these samples by collaborators at the University of Alaska. These DNA samples were shipped to the research institute.
 
 ```{r Match parentage and capture IDs}
 parentage <- left_join(parentage, captures[,c("bird_ID","colour_combo")], 
@@ -942,6 +937,33 @@ daily_activity %>%
 
 The table above shows the percentage of time that males (each with a unique colour_combo) were active when female fertility was at its peak (40 fertile females, 'ff_40') compared with when females were no longer fertile and were incubating (0 fertile females, 'ff_0'). Many males were much more active during the peak fertile period.
 
+The table below summarises activity levels when there were no fertile females.
+
+```{r}
+daily_activity %>%
+  ungroup() %>%
+  filter(n_FertileFemales==0) %>%
+  summarise(mean_perc_active=mean(perc_active),
+            sd_perc_active=sd(perc_active),
+            mean_hours_active=24/100*mean_perc_active,
+            sd_hours_active=24/100*sd_perc_active) %>%
+  flextable()
+```
+
+The table below summarises activity levels when there were the maximum number of fertile females.
+
+```{r}
+daily_activity %>%
+  ungroup() %>%
+  filter(n_FertileFemales==40) %>%
+  summarise(mean_perc_active=mean(perc_active),
+            sd_perc_active=sd(perc_active),
+            mean_hours_active=24/100*mean_perc_active,
+            sd_hours_active=24/100*sd_perc_active) %>%
+  flextable()
+```
+
+
 ```{r Difference in activity when min vs. max fertile females 2}
 daily_activity %>%
   ungroup() %>%
@@ -1112,9 +1134,8 @@ save_as_docx(stage_m_flex,
 When 'potentially' successful males are excluded the key results remain the same. There are no significant issues with model dispersion or influence of outliers.
 
 ```{r}
+as.data.frame(emmeans(stage_m, ~ success | breeding_stage))
 stage_emm_flex <- as_flextable(as.data.frame(emmeans(stage_m, ~ success | breeding_stage)))
-
-stage_emm_flex
 
 if(save_tables==TRUE){
 save_as_docx(stage_emm_flex, 
@@ -1154,14 +1175,14 @@ boxplot_active_date <- ggplot(daily_activity, aes(x=local_date,
                                                  y=perc_active,
                                                  group=local_date))+
   theme_classic()+
-  theme(panel.grid.minor.y = element_line(size=.1, color="darkgrey"))+
   geom_boxplot(colour="gray30", outlier.shape = NA)+
   geom_point(size=small.point.size,
               aes(colour=success, alpha=success, fill=success),
              shape=default_shape)+
-  coord_flip(xlim = c(max(daily_activity$local_date)+24*60*30, # manually adjusted
-                            min(daily_activity$local_date)-24*60*30),
-             ylim=c(0,115))+
+  coord_flip(ylim=c(0,115),
+             xlim = c(max(daily_activity$local_date)+24*60*30, # manually adjusted
+                            min(daily_activity$local_date)-24*60*30))+
+  theme(panel.grid.minor.y = element_line(size=.1, color="darkgrey"))+
   scale_x_continuous(breaks = c(seq(
                               local_date_to_posix('2022-06-11')-8*24*60*30,
                               local_date_to_posix('2022-07-11'),
@@ -1564,6 +1585,13 @@ cor(ind_fertile_activity$tenure_days, ind_fertile_activity$arrival_day)
 ```
 
 Tenure is highly correlated with number of hours of data recorded, which makes sense. So we do not include both these variables in the model. Tenure is the more interesting and biologically meaningful variable, so we focus on that.
+
+Also note that mean ODBA and proportion of time spent active are highly correlated.
+
+```{r}
+cor.test(ind_fertile_activity$mean_ODBA, ind_fertile_activity$prop_activity)
+```
+
 
 ## Mating success (number of females with which a male sired offspring)
 

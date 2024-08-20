@@ -2,9 +2,7 @@
 
 ------------------------------------------------------------------------
 
-This is the repository for the following paper (in submission):
-
-`Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.`
+This is the repository for a paper (currently anonymized; in submission):
 
 # Overview
 

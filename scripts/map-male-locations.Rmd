@@ -1,6 +1,5 @@
 ---
 title: 'Map male locations'
-author: Anne Aulsebrook
 output: 
   rmdformats::robobook:
     code_folding: hide
@@ -8,10 +7,6 @@ output:
 ---
 
 # Background
-
-*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
-
-*Repository*: https://github.com/aaulsebrook/pesa-activity
 
 *Purpose*: This notebook is used to explore male pectoral sandpiper locations and detect when males were away from the study area for extended periods. Data collected when males are away from the study area are excluded from further analyses.
 

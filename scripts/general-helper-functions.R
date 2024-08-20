@@ -1,5 +1,4 @@
 # ~~~~~ SCRIPT OVERVIEW --------------------------------------------------------
-#' This script accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
 #'
 #' Purpose: 
 #' This script creates common functions that are used by multiple scripts
@@ -8,9 +7,6 @@
 #' Main functions include: 
 #' * date/time handling functions (to deal with multiple timezones)
 #' * list of birds to exclude from analyses
-#' 
-#' Code maintainers: Anne Aulsebrook
-#' github.com/aaulsebrook/pesa_activity
 #'
 #' Date Created: 2022-03-22
 

@@ -18,11 +18,7 @@
 
 # Overview {#overview}
 
-This readme describes the dataset for the following paper:
-
-Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
-
-Datsets and scripts to accompany the analysis are available at <https://github.com/aaulsebrook/pesa-activity>
+This readme describes the dataset for a paper currently in submission.
 
 The dataset includes 7 files, described further below.
 

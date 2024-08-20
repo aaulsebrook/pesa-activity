@@ -1,13 +1,8 @@
 # ~~~~~ SCRIPT OVERVIEW --------------------------------------------------------
-#' This script accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
 #'
 #' Purpose: 
 #' This script cleans ODBA data collected on-board DEBUT NANO (Druid Technology)
 #' data loggers, ready for analysis. 
-#'
-#' Code maintainers: Anne Aulsebrook
-#' Code contributors: Anne Aulsebrook, Rowan Jacques-Hamilton
-#' github.com/aaulsebrook/pesa_activity
 #'
 #' Inputs:
 #' - Raw ODBA data (odba-data; csv)

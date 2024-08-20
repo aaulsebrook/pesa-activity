@@ -1,6 +1,5 @@
 ---
 title: "Define activity thresholds"
-author: Anne Aulsebrook
 output: 
   rmdformats::robobook:
   code_folding: hide
@@ -8,10 +7,6 @@ output:
 ---
 
 # Background
-
-*Manuscript*: This document accompanies the manuscript: Aulsebrook, Valcu, Jacques-Hamilton, Kwon, Krietsch, Santema, Delhey, Teltscher, Lesku, Kuhn, Wittenzellner & Kempenaers (In Submission) Activity and energy expenditure predict male mating success in the polygynous pectoral sandpiper.
-
-*Repository*: https://github.com/aaulsebrook/
 
 *Purpose* This notebook is used to define activity thresholds for pectoral sandpipers. We recorded accelerometry from wild male pectoral sandpipers using miniature data loggers. The goal is to define whether an individual is "resting" or "active" at any given time, based on accelerometry values.  
 
