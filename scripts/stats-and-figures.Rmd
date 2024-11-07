@@ -58,7 +58,7 @@ library(ggalt) # for dumbbell charts
 library(data.table) # for fast table reading and rolling functions
 library(flextable) # generates neat tables
 library(officer) # formatting flextable for Microsoft Word
-library(egg) # useful for combining plots (ggarrange)
+#library(egg) # useful for combining plots (ggarrange)
 library(ggrepel) # for nicely spaced labels on plots
 library(fasttime) # for faster conversions to posixct
 library(wadeR)
@@ -68,15 +68,15 @@ library(stringr) # count matches in string
 library(here) # for easier directory navigation
 library(glue)
 library(dichromat) # for checking colours in figures
-library(viridis)
 library(emmeans)
 library(effects)
 library(glmmTMB) # for glmm with beta error distribution
 library(geosphere) # for distances lat lon
 library(lme4)
 library(spatialrisk) # for distances lat lon
-library(patchwork)
+library(patchwork) # better than ggarrange for arranging figures
 library(DHARMa)
+#library(viridis)
 library(sf)
 library(future)
 library(broom.mixed) # for converting glmmtmb to flextable
@@ -328,7 +328,9 @@ ff_by_date$n_FertileFemales <- sapply(all_FertileDates,
 
 barplot_ff <- ggplot(ff_by_date, aes(x=date, 
                                      y=n_FertileFemales)) +
-  theme_classic()+
+  # theme_classic()+
+  theme(panel.background=element_blank(),
+        axis.line = element_line(size=0.5, colour="black"))+
   annotate(geom="rect",
            xmin=start_FertilePeriod-24*60*30,
            xmax=end_FertilePeriod+24*60*30,
@@ -494,16 +496,6 @@ male_tenure <- left_join(male_tenure, male_offsite_summary, join_by('bird_ID')) 
 
 In total, there were `r nrow(nests)` breeding females and median male tenure was `r median(male_tenure$tenure_days)` days. This was therefore a moderate density breeding season, compared to other years (Kempenaers and Valcu 2017, Nature; number of breeding females ranges from approx. 23-90). It was higher density year than 2008 and 2009, which were the breeding seasons when data were collected for the previous activity study (Lesku et al. 2012, Science: 39 nests in 2008 and 17 nests in 2009.)
 
-## Calculate mean ODBA when active
-
-To get a relative estimate of the "intensity" of activity, we can look at mean overall dynamic body acceleration during active periods.
-
-```{r }
-activity <- activity %>%
-  mutate(mean_ODBA_active = case_when(active=="active" ~ mean_ODBA,
-                                      TRUE ~ as.numeric(NA)))
-```
-
 ## Exclude unreliable or irrelevant ODBA data
 
 A simple and common measure of activity is overall dynamic body acceleration (ODBA). ODBA is a measure of total movement, combined across the three axes of the accelerometer. It is calculated by first subtracting static acceleration from each axis (acceleration related to posture; most often calculated by taking the 2-second running mean) to get dynamic acceleration, then summing together the absolute dynamic acceleration for each axis (for example, see: https://besjournals.onlinelibrary.wiley.com/doi/10.1111/j.2041-210X.2010.00057.x) ODBA is also commonly used as a proxy for energy expenditure related to movement.
@@ -591,15 +583,14 @@ activity <- activity %>%
 activity$local_date = floor_date(activity$window_end_localtime, unit="days")
 
 daily_activity <- activity %>%
-  filter(!is.na(activity_threshold)) %>%
+  #filter(!is.na(activity_threshold)) %>%
   group_by(bird_ID, tag_ID, colour_combo, local_date) %>%
-  summarise(perc_active=sum(active=="active")/n()*100,
-            total_active=sum(active=="active"),
-            mean_ODBA_active=case_when(perc_active==0 ~ NA,
-                                       TRUE ~ mean(mean_ODBA[active=="active"])),
-            mean_ODBA=mean(mean_ODBA),
+  summarise(activity_threshold=first(activity_threshold),
             n_windows=n(),
-            n_hours=n()/(60/window_length))
+            n_hours=n_windows*window_length/60,
+            perc_active=sum(active=="active")/n_windows*100,
+            total_active=sum(active=="active"),
+            mean_ODBA=mean(mean_ODBA))
 ```
 
 ## Determine distance of males from fertile nests
@@ -668,8 +659,6 @@ nest_long <- left_join(nest_dates, nests, join_by('nest'), relationship='many-to
   st_as_sf(coords = c("lon", "lat"), crs = 4326, remove = FALSE)
 ```
 
-Note that this next chunk of code can take a little while to run (determining centroid of points each date ~ 30 secs).
-
 ```{r Summarise male GPS data by date}
 male_date_gps <- male_gps %>%
   group_by(colour_combo, bird_ID, tag_ID, local_date, released_dt) %>%
@@ -697,7 +686,7 @@ daily_activity_gps <- activity %>%
   filter(!is.na(mean_ODBA))
 ```
 
-Note that this next chunk of code takes a while to run (getting distance from each male from each nest on each day; ~ 5 mins).
+Note that this next chunk of code takes a while to run (getting distance from each male from each nest on each day; ~ 3-5 mins).
 
 ```{r Combine male and nest data and calculate distance}
 nest_male_date <- inner_join(nest_long,
@@ -877,26 +866,29 @@ ind_total_active <- daily_activity %>%
   group_by(bird_ID, colour_combo, breeding_stage,
            body_mass, n_eggs, n_nests, success,
            likely_undetected_success, potential_n_extra_nests, likely_extra_nests) %>%
-  summarise(n_samples=sum(n_windows),
+  summarise(n_windows=sum(n_windows),
             n_days=n(),
             total_perc_active=sum(total_active)/sum(n_windows)*100)
 
 # Note: total perc active will be same whether calculated from activity or daily_activity
-# However, mean ODBA and mean_ODBA_active should be calculated from activity
+# However, mean ODBA should be calculated from activity
 
 ind_odba <- activity %>%
   filter(!is.na(activity_threshold)) %>%
     group_by(bird_ID, colour_combo, breeding_stage,
            body_mass, n_eggs, n_nests, success,
            likely_undetected_success, potential_n_extra_nests, likely_extra_nests) %>%
-  summarise(mean_ODBA=mean(mean_ODBA),
-            mean_ODBA_active=mean(mean_ODBA_active, na.rm=T))
+  summarise(mean_ODBA=mean(mean_ODBA))
 
 ind_activity <- full_join(ind_total_active, ind_odba, 
                            by=c('bird_ID','colour_combo','breeding_stage',
                            'body_mass','n_eggs','n_nests','success',
                            'likely_undetected_success','potential_n_extra_nests',
                            'likely_extra_nests'))
+
+# Filter out missing/insufficient data
+ind_activity <- ind_activity %>% filter(!is.na(total_perc_active))
+
 
 rm(ind_total_active, ind_odba)
 ```
@@ -906,11 +898,11 @@ Note: There are no males with <2 days of data during the fertile period and >=2 
 ```{r Refine data}
 males_with_sufficient_data = ind_activity %>%
   filter(breeding_stage=="fertile" & n_days>=min_acc_days) %>%
-  select(colour_combo, bird_ID, n_days, n_samples, success)
+  select(colour_combo, bird_ID, n_days, n_windows, success)
 
 males_with_sufficient_data %>%
-  arrange(n_days, n_samples, success) %>%
-  select(colour_combo, bird_ID, n_days, n_samples, n_nests) %>%
+  arrange(n_days, n_windows, success) %>%
+  select(colour_combo, bird_ID, n_days, n_windows, n_nests) %>%
   flextable()
 ```
 
@@ -1033,13 +1025,13 @@ postfertile_males <- ind_activity %>%
   filter(breeding_stage=="post-fertile" & n_days>=2) %>%
   group_by(bird_ID) %>%
   summarise(mean(total_perc_active),
-            mean(mean_ODBA_active))
+            mean(mean_ODBA))
 
 fertile_males <- ind_activity %>%
   filter(breeding_stage=="fertile") %>% # already filtered to n_days>=2
   group_by(bird_ID) %>%
   summarise(mean(total_perc_active),
-            mean(mean_ODBA_active))
+            mean(mean_ODBA))
 ```
 
 ## Fig: Breeding stage and male % active
@@ -1137,7 +1129,7 @@ daily_activity <- daily_activity %>%
 ```
 
 ```{r LME for breeding stage and percent male activity, width=8}
-stage_m <- glmmTMB(prop_activity ~ breeding_stage*success + (breeding_stage|bird_ID),
+stage_m <- glmmTMB(prop_activity ~ breeding_stage + (breeding_stage|bird_ID),
                    data=daily_activity,
                    #data=daily_activity %>% filter(likely_undetected_success=="no"),
                    family=beta_family(link="logit"))
@@ -1160,20 +1152,9 @@ save_as_docx(stage_m_flex,
 }
 ```
 
-When 'potentially' successful males are excluded the key results remain the same, although the interaction between breeding stage and success becomes statistically significant. There are no significant issues with model dispersion or influence of outliers.
+When 'potentially' successful males are excluded the results remain the same. There are no significant issues with model dispersion or influence of outliers.
 
-```{r}
-as.data.frame(emmeans(stage_m, ~ success | breeding_stage))
-stage_emm_flex <- as_flextable(as.data.frame(emmeans(stage_m, ~ success | breeding_stage)))
-
-if(save_tables==TRUE){
-save_as_docx(stage_emm_flex, 
-             pr_section = sect_properties,
-             path = glue("{output_path}/breeding_stage_emm.docx"))
-}
-```
-
-Male spent more time active during the fertile stage, compared with the post-fertile stage. During the fertile period, successful males were more active than unsuccessful males; during the post-fertile stage, there was no difference. The inclusion of males that were more likely to have sired additional offspring (predated before they could be sampled) had no effect on these results.
+Male spent more time active during the fertile stage, compared with the post-fertile stage. The inclusion of males that were more likely to have sired additional offspring (predated before they could be sampled) had no effect on these results.
 
 *Prediction 2* Male activity (% time active per day) increases with the number of fertile females at the site.
 
@@ -1188,7 +1169,7 @@ date_activity_n <- daily_activity %>%
 ```
 
 ```{r Format date labels}
-date_labels = c("","","","","",
+date_labels = c("",
                 "12 June", "", "", "",
                 "16 June", "", "", "",
                 "20 June", "", "", "",
@@ -1199,21 +1180,30 @@ date_labels = c("","","","","",
                 "10 July", "")
 ```
 
+Unfortunately, there are problems when trying to reverse a date axis and include minor gridlines - the 
+
 ```{r Male time spent active, fig.height=7,fig.width=6, message=FALSE}
 boxplot_active_date <- ggplot(daily_activity, aes(x=local_date,
                                                  y=perc_active,
                                                  group=local_date))+
-  theme_classic()+
+  # theme_classic()+
   geom_boxplot(colour="gray30", outlier.shape = NA)+
   geom_point(size=small.point.size,
-              aes(colour=success, alpha=success, fill=success),
+             aes(colour=success, alpha=success, fill=success),
              shape=default_shape)+
+  geom_vline(xintercept=c(seq(min(daily_activity$local_date)-24*60*30,
+                              max(daily_activity$local_date)+24*60*30,
+                              by="days")),
+             size=0.5,
+             colour="darkgrey")+
+  geom_vline(xintercept=max(daily_activity$local_date)+24*60*30,
+             size=0.5,
+             colour="black")+
   coord_flip(ylim=c(0,115),
-             xlim = c(max(daily_activity$local_date)+24*60*30, # manually adjusted
-                            min(daily_activity$local_date)-24*60*30))+
-  theme(panel.grid.minor.y = element_line(size=.1, color="darkgrey"))+
+             xlim = c(max(daily_activity$local_date)+24*60*30,
+                      min(daily_activity$local_date)-24*60*30))+
   scale_x_continuous(breaks = c(seq(
-                              local_date_to_posix('2022-06-11')-8*24*60*30,
+                              local_date_to_posix('2022-06-11'),
                               local_date_to_posix('2022-07-11'),
                               by="days")),
                      labels=date_labels,
@@ -1230,45 +1220,56 @@ boxplot_active_date <- ggplot(daily_activity, aes(x=local_date,
             size=(label.size-2)/.pt,
             colour="gray50",
             aes(local_date, 107, label = n_ind),
-            vjust = 0.5,
+            vjust = 0.3,
             hjust = 0)+
   theme(axis.ticks.length.y = unit(0.07, "cm"),
         text=element_text(family=font.family),
         axis.title = element_text(size=axis.heading.size),
-        axis.text = element_text(size=label.size))
+        axis.text = element_text(size=label.size),
+        axis.line.y = element_line(size=0.5, color="black"),
+        panel.background=element_blank())
 
 boxplot_active_date
 ```
 
 ```{r Male time spent active and breeding stage, fig.height=4.5, fig.width=7, message=FALSE}
 hor_barplot_ff <- barplot_ff +
-  coord_flip(xlim = c(max(daily_activity$local_date)+24*60*30, #manually adjusted
-                            min(daily_activity$local_date)-24*60*30),
+  theme(axis.line.x=element_blank()) +
+  coord_flip(xlim = c(max(daily_activity$local_date)+24*60*30, 
+                      min(daily_activity$local_date)-24*60*30),
              ylim=c(0,42)) +
-    theme(panel.grid.minor.y = element_line(size=.1, color="grey"))+ 
-    scale_x_continuous(breaks=c(seq(
-                       min(daily_activity$local_date)-2*24*60*30,
-                       max(daily_activity$local_date),
-                       by="1 days")),
-                       expand=c(0,0))+
+  geom_vline(xintercept=c(seq(min(daily_activity$local_date)-24*60*30,
+                              max(daily_activity$local_date)+24*60*30,
+                              by="days")),
+             size=0.5,
+             colour="darkgrey")+
+  geom_vline(xintercept=max(daily_activity$local_date)+24*60*30,
+             size=0.5,
+             colour="black")+
+  scale_x_continuous(breaks = c(seq(
+                              local_date_to_posix('2022-06-11'),
+                              local_date_to_posix('2022-07-11'),
+                              by="days")),
+                     expand=c(0,0))+
     scale_y_continuous(expand=c(0,0),
                        breaks = seq(0,45,by=10))+
     theme(axis.title.y = element_blank(),
           axis.text.y = element_blank(),
           axis.ticks.y = element_blank(),
           text=element_text(family=font.family),
-        legend.title = element_text(size=legend.heading.size),
-        legend.text = element_text(size=label.size),
-        axis.title = element_text(size=axis.heading.size),
-        axis.text = element_text(size=label.size)) +
+          legend.title = element_text(size=legend.heading.size),
+          legend.text = element_text(size=label.size),
+          axis.title = element_text(size=axis.heading.size),
+          axis.text = element_text(size=label.size)) +
   ylab("\n number of fertile females")
 
-season_act_plot <- ggarrange(
-  boxplot_active_date +
-    theme(panel.background = element_blank()),
-  hor_barplot_ff,
+season_act_plot <- boxplot_active_date +
+  hor_barplot_ff +
+  plot_layout(
   nrow=1,
   widths = c(1, 0.5))
+
+season_act_plot
 ```
 
 ```{r LME for fertile females and percent male activity}
@@ -1411,10 +1412,10 @@ Daily male ODBA during activity ranged from less than 20% to over 99% (mean ± s
 daily_activity %>%
   ungroup() %>%
   filter(n_FertileFemales==0 | n_FertileFemales==40) %>%
-  select(colour_combo, mean_ODBA_active, n_FertileFemales) %>%
+  select(colour_combo, mean_ODBA, n_FertileFemales) %>%
   group_by(colour_combo, n_FertileFemales) %>%
-  summarise(mean_ODBA_active=mean(mean_ODBA_active)) %>%
-  pivot_wider(values_from = 'mean_ODBA_active', names_from = 'n_FertileFemales', names_prefix="ff_") %>%
+  summarise(mean_ODBA=mean(mean_ODBA)) %>%
+  pivot_wider(values_from = 'mean_ODBA', names_from = 'n_FertileFemales', names_prefix="ff_") %>%
   filter(!is.na(ff_40) & !is.na(ff_0)) %>%
   mutate(diff=ff_40-ff_0) %>%
   flextable()
@@ -1428,8 +1429,8 @@ The table below summarises mean ODBA levels when there were no fertile females.
 daily_activity %>%
   ungroup() %>%
   filter(n_FertileFemales==0) %>%
-  summarise(sd_ODBA_active=sd(mean_ODBA_active),
-            mean_ODBA_active=mean(mean_ODBA_active)) %>%
+  summarise(sd_ODBA_active=sd(mean_ODBA),
+            mean_ODBA=mean(mean_ODBA)) %>%
   flextable()
 ```
 
