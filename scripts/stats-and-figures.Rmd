@@ -1180,8 +1180,6 @@ date_labels = c("",
                 "10 July", "")
 ```
 
-Unfortunately, there are problems when trying to reverse a date axis and include minor gridlines - the 
-
 ```{r Male time spent active, fig.height=7,fig.width=6, message=FALSE}
 boxplot_active_date <- ggplot(daily_activity, aes(x=local_date,
                                                  y=perc_active,
@@ -1387,26 +1385,7 @@ if(save_plots==TRUE){
 }
 ```
 
-# Q: TO RESOLVE: Within- vs. among-individual variation in activity
-
-```{r}
-# var_ff_m <- glmmTMB(prop_activity ~ 
-#                   scale(n_FertileFemales) + 
-#                   (scale(n_FertileFemales)|bird_ID),
-#                   data = daily_activity,
-#                   family = beta_family(link="logit"))
-# summary(var_ff_m)
-# 
-# confint(ff_m, level=0.95)
-# 
-# simulationOutput <- simulateResiduals(ff_m)
-# testResiduals(simulationOutput)
-```
-
-
 # Q: Do males increase the intensity of their activity when there are more mating opportunities?
-
-Daily male ODBA during activity ranged from less than 20% to over 99% (mean ± standard deviation: `r mean(daily_activity$perc_active)` +/- `r sd(daily_activity$perc_active)`.
 
 ```{r Difference in mean ODBA when active when min vs. max fertile females}
 daily_activity %>%
@@ -1421,7 +1400,7 @@ daily_activity %>%
   flextable()
 ```
 
-The table above shows the mean ODBA of males (each with a unique colour_combo) when they were active, when female fertility was at its peak (40 fertile females, 'ff_40') compared with when females were no longer fertile and were incubating (0 fertile females, 'ff_0'). All males showed more intense activity during the peak fertile period.
+The table above shows the mean ODBA of males (each with a unique colour_combo) when female fertility was at its peak (40 fertile females, 'ff_40') compared with when females were no longer fertile and were incubating (0 fertile females, 'ff_0'). Almost all males showed more intense activity during the peak fertile period.
 
 The table below summarises mean ODBA levels when there were no fertile females.
 
@@ -1429,7 +1408,7 @@ The table below summarises mean ODBA levels when there were no fertile females.
 daily_activity %>%
   ungroup() %>%
   filter(n_FertileFemales==0) %>%
-  summarise(sd_ODBA_active=sd(mean_ODBA),
+  summarise(sd_ODBA=sd(mean_ODBA),
             mean_ODBA=mean(mean_ODBA)) %>%
   flextable()
 ```
@@ -1440,8 +1419,8 @@ The table below summarises mean ODBA levels when there were the maximum number o
 daily_activity %>%
   ungroup() %>%
   filter(n_FertileFemales==40) %>%
-  summarise(sd_ODBA_active=sd(mean_ODBA_active),
-            mean_ODBA_active=mean(mean_ODBA_active)) %>%
+  summarise(sd_ODBA=sd(mean_ODBA),
+            mean_ODBA=mean(mean_ODBA)) %>%
   flextable()
 ```
 
@@ -1455,7 +1434,7 @@ odba_fert_boxplot <- ggplot() +
   geom_boxplot(data = ind_activity_plotdat %>% 
                  filter(plot_factor == "fertile box"),
                aes(x = plot_factor,
-                   y = mean_ODBA_active),
+                   y = mean_ODBA),
                outlier.shape=default_shape,
                fill="white",
                width=0.7) +
@@ -1463,14 +1442,14 @@ odba_fert_boxplot <- ggplot() +
                  filter(plot_factor == "fertile point" |
                           plot_factor == "post-fertile point"),
                aes(x = plot_factor,
-                   y = mean_ODBA_active,
+                   y = mean_ODBA,
                    fill=success, colour=success, alpha=success),
              size=small.point.size,
              position=position_jitter(w=0.15, h=0, seed = 1)) +
   geom_boxplot(data = ind_activity_plotdat %>% 
                  filter(plot_factor == "post-fertile box"),
                aes(x = plot_factor,
-                   y = mean_ODBA_active),
+                   y = mean_ODBA),
                outlier.shape=default_shape,
                fill="white",
                width=0.7)+
@@ -1478,12 +1457,12 @@ odba_fert_boxplot <- ggplot() +
                  filter(plot_factor == "fertile point" |
                           plot_factor == "post-fertile point"),
             aes(x = plot_factor,
-                y = mean_ODBA_active,
+                y = mean_ODBA,
                 colour=success, group=bird_ID, alpha=success), 
             size=small.point.size/3,
             position=position_jitter(w=0.15, h=0, seed = 1)) +
-  coord_cartesian(ylim=c(0.2,0.65))+
-  scale_y_continuous(breaks=c(seq(0.2,0.6,by=0.1)),
+  coord_cartesian(ylim=c(0,0.6))+
+  scale_y_continuous(breaks=c(seq(0,0.6,by=0.1)),
                      expand=c(0,0))+
   scale_x_discrete(breaks = c("fertile box", "post-fertile box"),
                    labels = c("fertile","post-fertile"))+
@@ -1492,7 +1471,7 @@ odba_fert_boxplot <- ggplot() +
   scale_alpha_manual(values=c(0.5,0.8), name="Sired offspring?")+
   scale_shape_manual(values=c(default_shape), guide="none") +
   xlab("\n breeding stage")+
-  ylab("mean male ODBA when active\n")+
+  ylab("mean male ODBA\n")+
   theme(text=element_text(family=font.family),
         axis.title = element_text(size=axis.heading.size),
         axis.text = element_text(size=label.size),
@@ -1509,24 +1488,24 @@ odba_fert_boxplot
 ```{r Summarise means for fertile ODBA}
 ind_activity %>%
   group_by(breeding_stage, success) %>%
-  summarise(mean_mean_ODBA_active = mean(mean_ODBA_active),
-            sd_ODBA_active = sd(mean_ODBA_active),
+  summarise(mean_mean_ODBA = mean(mean_ODBA),
+            sd_ODBA = sd(mean_ODBA),
             n=n(),
-            se_ODBA_active = sd_ODBA_active/sqrt(n)) %>%
+            se_ODBA = sd_ODBA/sqrt(n)) %>%
   flextable()
 ```
 
 In the plot above, there are `r length(unique(ind_activity$colour_combo))` individual males in total, `r unique(subset(ind_activity, breeding_stage=="post-fertile")$colour_combo)` of which have post-fertile data. Males with "uncertain" success are treated as "no" success.
 
-Each datapoint represents the mean ODBA of an individual male when active.
+Each datapoint represents the mean ODBA of an individual male.
 
-```{r Check factors for model}
+```{r Check factors for model, include=FALSE}
 str(daily_activity$breeding_stage)
 str(daily_activity$bird_ID)
 ```
 
 ```{r LME for breeding stage and percent male activity, width=10}
-odba_stage_m <- glmmTMB(mean_ODBA_active ~ breeding_stage*success + (breeding_stage|bird_ID),
+odba_stage_m <- glmmTMB(mean_ODBA ~ breeding_stage + (breeding_stage|bird_ID),
                    data=daily_activity,
                    #data=daily_activity %>% filter(likely_undetected_success=="no"),
                    family=beta_family(link="logit"))
@@ -1547,11 +1526,11 @@ save_as_docx(odba_stage_m_flex,
 }
 ```
 
-When 'potentially' successful males are excluded the conclusions remain the same, although the interaction between breeding stage and success becomes statistically significant.
+When 'potentially' successful males are excluded the conclusions remain the same.
 
 ```{r}
-as.data.frame(emmeans(odba_stage_m, ~ success | breeding_stage))
-odba_stage_emm_flex <- as_flextable(as.data.frame(emmeans(odba_stage_m, ~ success | breeding_stage)))
+as.data.frame(emmeans(odba_stage_m, ~ breeding_stage))
+odba_stage_emm_flex <- as_flextable(as.data.frame(emmeans(odba_stage_m, ~ breeding_stage)))
 
 if(save_tables==TRUE){
 save_as_docx(stage_emm_flex, 
@@ -1560,16 +1539,77 @@ save_as_docx(stage_emm_flex,
 }
 ```
 
-Male tended to show more intense activity during the fertile stage, compared with the post-fertile stage. During the fertile period, successful males had more intense activity than unsuccessful males; during the post-fertile stage, there was no difference. The inclusion of males that were more likely to have sired additional offspring (predated before they could be sampled) had no effect on these results.
+Male tended to show more intense activity during the fertile stage, compared with the post-fertile stage. The inclusion of males that were more likely to have sired additional offspring (predated before they could be sampled) had no effect on these results.
 
-*Prediction 2* Intensity of male activity (mean ODBA when active) increases with the number of fertile females at the site.
+*Prediction 2* Intensity of male activity (mean ODBA) increases with the number of fertile females at the site.
 
 We also examine this trend in more detail, by looking at activity and the number of fertile females each day across the season.
 
-## Fig: Male active ODBA and number of fertile females
+## Fig: Date and male ODBA
+
+```{r Male time spent active, fig.height=7,fig.width=6, message=FALSE}
+boxplot_odba_date <- ggplot(daily_activity, aes(x=local_date,
+                                                 y=mean_ODBA,
+                                                 group=local_date))+
+  geom_boxplot(colour="gray30", outlier.shape = NA)+
+  geom_point(size=small.point.size,
+             aes(colour=success, alpha=success, fill=success),
+             shape=default_shape)+
+  geom_vline(xintercept=c(seq(min(daily_activity$local_date)-24*60*30,
+                              max(daily_activity$local_date)+24*60*30,
+                              by="days")),
+             size=0.5,
+             colour="darkgrey")+
+  geom_vline(xintercept=max(daily_activity$local_date)+24*60*30,
+             size=0.5,
+             colour="black")+
+  coord_flip(ylim=c(0,0.9),
+             xlim = c(max(daily_activity$local_date)+24*60*30,
+                      min(daily_activity$local_date)-24*60*30))+
+  scale_x_continuous(breaks = c(seq(
+                              local_date_to_posix('2022-06-11'),
+                              local_date_to_posix('2022-07-11'),
+                              by="days")),
+                     labels=date_labels,
+                     expand=c(0,0))+
+  scale_y_continuous(breaks=seq(0,0.9,by=0.2),
+                     expand=c(0,0)) +
+  scale_colour_manual(values = c(fail_colour, success_colour), guide="none")+
+  scale_fill_manual(values = c(fail_colour, success_colour), guide="none")+
+  scale_alpha_manual(values = c(0.5, 0.8), guide="none")+
+  xlab("date\n")+
+  ylab("\nmean male ODBA (g)")+
+  geom_text(data = date_activity_n,
+            family=font.family,
+            size=(label.size-2)/.pt,
+            colour="gray50",
+            aes(local_date, 107, label = n_ind),
+            vjust = 0.3,
+            hjust = 0)+
+  theme(axis.ticks.length.y = unit(0.07, "cm"),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        axis.line.y = element_line(size=0.5, color="black"),
+        panel.background=element_blank())
+
+boxplot_odba_date
+```
+
+```{r Male time spent active and breeding stage, fig.height=4.5, fig.width=7, message=FALSE}
+season_odba_plot <- boxplot_odba_date +
+  hor_barplot_ff +
+  plot_layout(
+  nrow=1,
+  widths = c(1, 0.5))
+
+season_odba_plot
+```
+
+## Fig: Male ODBA and number of fertile females
 
 ```{r LME for fertile females and male odba}
-ff_m_odba <- glmmTMB(mean_ODBA_active ~ scale(n_FertileFemales) +
+ff_m_odba <- glmmTMB(mean_ODBA ~ scale(n_FertileFemales) +
                      (scale(n_FertileFemales)|bird_ID),
                   data = daily_activity,
                   family = beta_family(link="logit"))
@@ -1594,7 +1634,7 @@ m_effects = effects::allEffects(ff_m_odba, xlevels = 160)
 m_ff_odba_effects = m_effects$`scale(n_FertileFemales)` %>% data.frame
 
 odba_ff_plot <- ggplot(daily_activity, aes(x=n_FertileFemales,
-                                               y=mean_ODBA_active))+
+                                               y=mean_ODBA))+
   theme_classic()+
   #geom_boxplot(colour="gray30", outlier.shape = NA)+
   geom_point(size=small.point.size,
@@ -1608,11 +1648,11 @@ odba_ff_plot <- ggplot(daily_activity, aes(x=n_FertileFemales,
   geom_ribbon(data = m_ff_odba_effects,
               aes(y = fit, x = n_FertileFemales, ymin = lower, ymax = upper),
               alpha = 0.2, fill=col_scale[1])+
-  coord_cartesian(ylim = c(0.2,0.8)) +
-  scale_y_continuous(breaks=seq(0.2,0.8,by=0.1),
+  coord_cartesian(ylim = c(0,0.9)) +
+  scale_y_continuous(breaks=seq(0,0.9,by=0.2),
                      expand = c(0,0)) +
   xlab("\nnumber of fertile females\n")+
-  ylab("mean daily ODBA when active\n")+
+  ylab("mean daily ODBA\n")+
   theme(axis.ticks.length.y = unit(0.07, "cm"),
         text=element_text(family=font.family),
         axis.title = element_text(size=axis.heading.size),
@@ -1626,10 +1666,26 @@ daily_activity %>%
   ungroup() %>%
   filter(n_FertileFemales == 0 | n_FertileFemales==40) %>%
   group_by(n_FertileFemales) %>%
-  summarise(mean_mean_ODBA_active = mean(mean_ODBA_active),
-            sd_odba_active = sd(mean_ODBA_active),
+  summarise(mean_mean_ODBA = mean(mean_ODBA),
+            sd_odba_active = sd(mean_ODBA),
             n=n(),
             se_odba_active=sd_odba_active/sqrt(n))
+```
+
+# Q: TO RESOLVE: Within- vs. among-individual variation in activity
+
+```{r}
+# var_ff_m <- glmmTMB(prop_activity ~ 
+#                   scale(n_FertileFemales) + 
+#                   (scale(n_FertileFemales)|bird_ID),
+#                   data = daily_activity,
+#                   family = beta_family(link="logit"))
+# summary(var_ff_m)
+# 
+# confint(ff_m, level=0.95)
+# 
+# simulationOutput <- simulateResiduals(ff_m)
+# testResiduals(simulationOutput)
 ```
 
 # TO FIX: Combined figure: Date and male active ODBA
@@ -1639,7 +1695,8 @@ fig1 <- activity_fert_boxplot + ylab("\nmale activity (% time)\n") + xlab("\nbre
   plot_spacer() +
   #plot_spacer() +
   season_act_plot +
-  plot_layout(design=layout) +
+  #plot_layout(design=layout) +
+  plot_layout(nrow=2)+
   plot_annotation(tag_levels = 'a',
                   tag_prefix = '(',
                   tag_suffix = ')') &
