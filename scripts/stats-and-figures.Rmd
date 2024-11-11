@@ -1118,6 +1118,8 @@ In the plot above, there are `r length(unique(ind_activity$colour_combo))` indiv
 
 Each datapoint represents the mean activity of an individual male. The pattern we see here is similar to what was found in Lesku et al. 2012, although activity levels are shifted around 30% lower. 
 
+## Model: Breeding stage and male % active
+
 ```{r Convert factors for model}
 daily_activity <- daily_activity %>%
   mutate(prop_activity=perc_active/100,
@@ -1270,6 +1272,8 @@ season_act_plot <- boxplot_active_date +
 season_act_plot
 ```
 
+## Model: Male % active and number of fertile females
+
 ```{r LME for fertile females and percent male activity}
 ff_m <- glmmTMB(prop_activity ~ 
                   scale(n_FertileFemales) + 
@@ -1294,48 +1298,57 @@ save_as_docx(ff_flex,
 
 Male activity (% time) was higher when there were more fertile females at the site.
 
-We can separate within- and between- individual effects using within-subject centering (https://www.sciencedirect.com/science/article/pii/S0003347208005423?via%3Dihub).
+We can also look at a variation of this model to better understand within- and among-individual variation.
 
-```{r Determine mean activity for each individual}
-# mean_daily_activity <- daily_activity %>%
-#   mutate(hours_active=n_hours*prop_activity) %>%
-#   group_by(colour_combo, bird_ID) %>%
-#   summarise(ind_mean_prop_activity = mean(prop_activity),
-#             ind_mean_ODBA = mean(mean_ODBA),
-#             success = first(success),
-#             likely_undetected_success = first(likely_undetected_success),
-#             n_days = n(),
-#             n_hours = sum(n_hours),
-#             total_prop_activity = sum(hours_active)/sum(n_hours))
-# 
-# centred_daily_activity <- left_join(daily_activity, mean_daily_activity,
-#                             join_by('colour_combo','bird_ID',
-#                                     'success', 'likely_undetected_success'),
-#                             relationship='many-to-one') %>%
-#   mutate(perc_active = prop_activity-ind_mean_prop_activity)
+## Model: Within- and among-individual variation in male activity
+
+```{r Within-individual centering by covariate}
+mean_fertile_females <- daily_activity %>%
+  group_by(colour_combo, bird_ID) %>%
+  summarise(ind_mean_ff = mean(n_FertileFemales))
+
+daily_activity <- left_join(daily_activity, mean_fertile_females,
+            join_by('colour_combo','bird_ID')) %>%
+  mutate(ind_dev_ff=ind_mean_ff-n_FertileFemales)
 ```
 
-```{r Model within and between individual effects}
-# ff_m2 <- glmmTMB(n_FertileFemales ~ scale(perc_active) + scale(ind_mean_prop_activity)  + (1|bird_ID),
-#                   data = centred_daily_activity)
-# summary(ff_m2)
-# confint(ff_m2, level=0.95)
-# 
-# simulationOutput <- simulateResiduals(ff_m2)
-# testDispersion(simulationOutput)
+In our study, there are two proximate mechanisms affecting the relationship between number of fertile females and male activity: individual changes in activity (within-individual variation) and differences in the presence of males at the site (between-individual variation). One method for distinguishing between these two mechanisms is within-subject centering (van de Pol and Wright 2009; Dingemanse and Dochtermann 2013).
+
+From Dingemanse and Dochtermann 2013:
+"[The] conflation of between- and within-individual effects can be separated by calculating the mean covariate value for the individual, and the deviation of the covariate from the mean for an individual for each measurement. Both of these predictor variables are then included in modelling the phenotypic response". 
+
+The effect of the latter (the "deviation" term) tells us the effect of the number of fertile females on male activity. The former (the "individual mean" term) tells us the effect of individuals being measured when there are different numbers of fertile females.
+
+We can again include a random slope, so that we can also look at 1) among-individual variation in the response to changes in the number of fertile females, and 2) how activity 'elevation' relates to activity 'slope' (covariance between random intercept and slope).
+
+```{r Model for variation in fertile females and percent male activity}
+ff_m2 <- glmmTMB(prop_activity ~ ind_mean_ff + ind_dev_ff +
+                  (ind_dev_ff|bird_ID),
+                  data = daily_activity,
+                  family = beta_family(link="logit"))
+summary(ff_m2)
+confint(ff_m2, level=0.95)
+
+simulationOutput <- simulateResiduals(ff_m)
+testResiduals(simulationOutput)
 ```
+
+Based on this model, we can make the following conclusions:
+
+* While both within- and between-individual variation contribute to the relationship between mating opportunities and male activity, within-individual variation has a stronger effect
+
+* There does not seem to be that much among-individual variation in activity slopes (i.e. most males are increasing their activity by a similar amount as number of fertile females increases?)
+
+* There is a fairly strong negative correlation between individual 'elevation' and 'slope'. So, males who were more active at their 'centred' number of fertile females aren't changing their activity as much as other males. Or, if we look at this the other way around, males with a lower centred activity level are increasing their activity more. This makes sense if the goal is to be more active than your rivals. But since variation in the slope is relatively small, I'm not sure how much to read into this. Also note that the nature of the relationship between intercept and slope (positive or negative) really depends on how the data are centred, suggesting that this relationship depends on where your reference point is.
 
 ```{r}
-# ff2_flex <- as_flextable(ff_m2)
-# if(save_tables==TRUE){
-# save_as_docx(ff2_flex, 
-#              pr_section = sect_properties,
-#              path = glue("{output_path}/fertile_females_model2.docx"))
-# }
-# ff2_flex
+ff2_flex <- as_flextable(ff_m2)
+if(save_tables==TRUE){
+save_as_docx(ff2_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/fertile_females_variation_model.docx"))
+}
 ```
-
-Relationship between male activity and number of fertile females attributed to within-individual changes.
 
 ## Fig: Male % active and number of fertile females
 
@@ -1385,6 +1398,70 @@ if(save_plots==TRUE){
 }
 ```
 
+## Combined figure: Date and male activity
+
+```{r fig.height=8, fig.width=6.4}
+layout <- "
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+"
+
+fig1 <- activity_fert_boxplot + ylab("\nmale activity (% time)\n") + xlab("\nbreeding stage\n\n") +
+  plot_spacer() +
+  #plot_spacer() +
+  season_act_plot +
+  plot_layout(design=layout) +
+  plot_layout(nrow=2)+
+  plot_annotation(tag_levels = 'a',
+                  tag_prefix = '(',
+                  tag_suffix = ')') &
+  theme(plot.tag = element_text(size=label.size, family = font.family, face="italic"))
+
+
+fig1
+```
+
+```{r}
+if(save_plots==TRUE){
+ggsave(plot=fig1,
+       filename='figure1-activity-stage_date.jpg',
+       path=output_path,
+       width=16,
+       height=20,
+       units="cm",
+       dpi=300)
+}
+```
+
+
 # Q: Do males increase the intensity of their activity when there are more mating opportunities?
 
 ```{r Difference in mean ODBA when active when min vs. max fertile females}
@@ -1426,7 +1503,7 @@ daily_activity %>%
 
 *Prediction*: Males increase the intensity of their activity (mean ODBA when active) when there are fertile females at the site.
 
-## Fig: Breeding stage and male active ODBA
+## Fig: Breeding stage and male ODBA
 
 ```{r}
 odba_fert_boxplot <- ggplot() +
@@ -1499,6 +1576,8 @@ In the plot above, there are `r length(unique(ind_activity$colour_combo))` indiv
 
 Each datapoint represents the mean ODBA of an individual male.
 
+## Model: Breeding stage and male ODBA
+
 ```{r Check factors for model, include=FALSE}
 str(daily_activity$breeding_stage)
 str(daily_activity$bird_ID)
@@ -1533,7 +1612,7 @@ as.data.frame(emmeans(odba_stage_m, ~ breeding_stage))
 odba_stage_emm_flex <- as_flextable(as.data.frame(emmeans(odba_stage_m, ~ breeding_stage)))
 
 if(save_tables==TRUE){
-save_as_docx(stage_emm_flex, 
+save_as_docx(odba_stage_emm_flex, 
              pr_section = sect_properties,
              path = glue("{output_path}/breeding_stage_emm.docx"))
 }
@@ -1606,7 +1685,7 @@ season_odba_plot <- boxplot_odba_date +
 season_odba_plot
 ```
 
-## Fig: Male ODBA and number of fertile females
+## Model: Fertile females and ODBA
 
 ```{r LME for fertile females and male odba}
 ff_m_odba <- glmmTMB(mean_ODBA ~ scale(n_FertileFemales) +
@@ -1628,6 +1707,39 @@ save_as_docx(ff_odba_flex,
              path = glue("{output_path}/fertile_females_odba_model.docx"))
 }
 ```
+
+## Model: Within- and among-individual variation 
+
+```{r Model for variation in fertile females and male ODBA}
+ff_m_odba2 <- glmmTMB(mean_ODBA ~ ind_mean_ff + ind_dev_ff +
+                  (ind_dev_ff|bird_ID),
+                  data = daily_activity,
+                  family = beta_family(link="logit"))
+summary(ff_m_odba2)
+confint(ff_m_odba2, level=0.95)
+
+simulationOutput <- simulateResiduals(ff_m_odba2)
+testResiduals(simulationOutput)
+```
+
+Based on this model, we can make the following conclusions:
+
+* The relationship between mating opportunities and male activity is explained by within-individual variation
+
+* There does not seem to be that much among-individual variation in activity slopes (i.e. most males are increasing their activity by a similar amount as number of fertile females increases?)
+
+* There is a fairly strong negative correlation between individual 'elevation' and 'slope', like what we saw with percent time active
+
+```{r}
+ff_odba2_flex <- as_flextable(ff_m_odba2)
+if(save_tables==TRUE){
+save_as_docx(ff_odba2_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/fertile_females_odba_variation_model.docx"))
+}
+```
+
+## Fig: Male ODBA and number of fertile females
 
 ```{r fig.width=3, fig.height=2.4}
 m_effects = effects::allEffects(ff_m_odba, xlevels = 160)
@@ -1652,7 +1764,7 @@ odba_ff_plot <- ggplot(daily_activity, aes(x=n_FertileFemales,
   scale_y_continuous(breaks=seq(0,0.9,by=0.2),
                      expand = c(0,0)) +
   xlab("\nnumber of fertile females\n")+
-  ylab("mean daily ODBA\n")+
+  ylab("mean daily ODBA (g)\n")+
   theme(axis.ticks.length.y = unit(0.07, "cm"),
         text=element_text(family=font.family),
         axis.title = element_text(size=axis.heading.size),
@@ -1672,30 +1784,47 @@ daily_activity %>%
             se_odba_active=sd_odba_active/sqrt(n))
 ```
 
-# Q: TO RESOLVE: Within- vs. among-individual variation in activity
-
-```{r}
-# var_ff_m <- glmmTMB(prop_activity ~ 
-#                   scale(n_FertileFemales) + 
-#                   (scale(n_FertileFemales)|bird_ID),
-#                   data = daily_activity,
-#                   family = beta_family(link="logit"))
-# summary(var_ff_m)
-# 
-# confint(ff_m, level=0.95)
-# 
-# simulationOutput <- simulateResiduals(ff_m)
-# testResiduals(simulationOutput)
-```
-
-# TO FIX: Combined figure: Date and male active ODBA
+## Combined figure: Date and male ODBA
 
 ```{r fig.height=8, fig.width=6.4}
-fig1 <- activity_fert_boxplot + ylab("\nmale activity (% time)\n") + xlab("\nbreeding stage\n\n") +
+layout <- "
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+AAAAAAAAAAAAAAAAAAAABB
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+DDDDDDDDDDDDDDDDDDDDDD
+"
+
+fig1 <- odba_fert_boxplot + ylab("\nmale activity (% time)\n") + xlab("\nbreeding stage\n\n") +
   plot_spacer() +
   #plot_spacer() +
   season_act_plot +
-  #plot_layout(design=layout) +
+  plot_layout(design=layout) +
   plot_layout(nrow=2)+
   plot_annotation(tag_levels = 'a',
                   tag_prefix = '(',
@@ -1709,7 +1838,7 @@ fig1
 ```{r}
 if(save_plots==TRUE){
 ggsave(plot=fig1,
-       filename='figure1-activity-stage_date.jpg',
+       filename='figure-odba-stage_date.jpg',
        path=output_path,
        width=16,
        height=20,
@@ -1718,7 +1847,7 @@ ggsave(plot=fig1,
 }
 ```
 
-# Combined figure: Fertile females and male active ODBA
+# Combined figure: Fertile females and male activity
 
 ```{r fig.height=2.5, fig.width=6.4}
 fig2 <- activity_ff_plot +
