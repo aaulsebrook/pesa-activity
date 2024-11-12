@@ -936,8 +936,21 @@ daily_activity %>%
             max_perc_active=max(perc_active),
             mean_perc_active=mean(perc_active),
             sd_perc_active=sd(perc_active),
+            n_birds=n_distinct(bird_ID),
             n=n(),
             se_perc_active=sd_perc_active/sqrt(n)) %>%
+  flextable()
+```
+
+```{r Difference in activity between fertile and post-fertile phase}
+daily_activity %>%
+  ungroup() %>%
+  group_by(breeding_stage) %>%
+  summarise(mean_perc_active=mean(perc_active),
+            sd_perc_active=sd(perc_active),
+            n_samples=n(),
+            n_birds=n_distinct(bird_ID),
+            se_perc_active=sd_perc_active/sqrt(n_samples)) %>%
   flextable()
 ```
 
@@ -1309,7 +1322,7 @@ mean_fertile_females <- daily_activity %>%
 
 daily_activity <- left_join(daily_activity, mean_fertile_females,
             join_by('colour_combo','bird_ID')) %>%
-  mutate(ind_dev_ff=ind_mean_ff-n_FertileFemales)
+  mutate(ind_dev_ff=n_FertileFemales-ind_mean_ff)
 ```
 
 In our study, there are two proximate mechanisms affecting the relationship between number of fertile females and male activity: individual changes in activity (within-individual variation) and differences in the presence of males at the site (between-individual variation). One method for distinguishing between these two mechanisms is within-subject centering (van de Pol and Wright 2009; Dingemanse and Dochtermann 2013).
@@ -1339,7 +1352,7 @@ Based on this model, we can make the following conclusions:
 
 * There does not seem to be that much among-individual variation in activity slopes (i.e. most males are increasing their activity by a similar amount as number of fertile females increases?)
 
-* There is a fairly strong negative correlation between individual 'elevation' and 'slope'. So, males who were more active at their 'centred' number of fertile females aren't changing their activity as much as other males. Or, if we look at this the other way around, males with a lower centred activity level are increasing their activity more. This makes sense if the goal is to be more active than your rivals. But since variation in the slope is relatively small, I'm not sure how much to read into this. Also note that the nature of the relationship between intercept and slope (positive or negative) really depends on how the data are centred, suggesting that this relationship depends on where your reference point is.
+* There is a fairly strong positive correlation between individual 'elevation' and 'slope'. So, males who were more active at their 'centred' number of fertile females are changing their activity more than other males.
 
 ```{r}
 ff2_flex <- as_flextable(ff_m2)
@@ -1464,7 +1477,7 @@ ggsave(plot=fig1,
 
 # Q: Do males increase the intensity of their activity when there are more mating opportunities?
 
-```{r Difference in mean ODBA when active when min vs. max fertile females}
+```{r Difference in mean ODBA when min vs. max fertile females}
 daily_activity %>%
   ungroup() %>%
   filter(n_FertileFemales==0 | n_FertileFemales==40) %>%
@@ -1501,7 +1514,7 @@ daily_activity %>%
   flextable()
 ```
 
-*Prediction*: Males increase the intensity of their activity (mean ODBA when active) when there are fertile females at the site.
+*Prediction*: Males increase the intensity of their activity (mean ODBA) when there are fertile females at the site.
 
 ## Fig: Breeding stage and male ODBA
 
@@ -1548,7 +1561,7 @@ odba_fert_boxplot <- ggplot() +
   scale_alpha_manual(values=c(0.5,0.8), name="Sired offspring?")+
   scale_shape_manual(values=c(default_shape), guide="none") +
   xlab("\n breeding stage")+
-  ylab("mean male ODBA\n")+
+  ylab("mean male ODBA (g)\n")+
   theme(text=element_text(family=font.family),
         axis.title = element_text(size=axis.heading.size),
         axis.text = element_text(size=label.size),
@@ -1820,10 +1833,10 @@ DDDDDDDDDDDDDDDDDDDDDD
 DDDDDDDDDDDDDDDDDDDDDD
 "
 
-fig1 <- odba_fert_boxplot + ylab("\nmale activity (% time)\n") + xlab("\nbreeding stage\n\n") +
+fig_s1 <- odba_fert_boxplot + ylab("\nmean male ODBA (g)\n") + xlab("\nbreeding stage\n\n") +
   plot_spacer() +
   #plot_spacer() +
-  season_act_plot +
+  season_odba_plot +
   plot_layout(design=layout) +
   plot_layout(nrow=2)+
   plot_annotation(tag_levels = 'a',
@@ -1832,12 +1845,12 @@ fig1 <- odba_fert_boxplot + ylab("\nmale activity (% time)\n") + xlab("\nbreedin
   theme(plot.tag = element_text(size=label.size, family = font.family, face="italic"))
 
 
-fig1
+fig_s1
 ```
 
 ```{r}
 if(save_plots==TRUE){
-ggsave(plot=fig1,
+ggsave(plot=fig_s1,
        filename='figure-odba-stage_date.jpg',
        path=output_path,
        width=16,
@@ -1847,7 +1860,7 @@ ggsave(plot=fig1,
 }
 ```
 
-# Combined figure: Fertile females and male activity
+## Combined figure: Fertile females and male activity
 
 ```{r fig.height=2.5, fig.width=6.4}
 fig2 <- activity_ff_plot +
@@ -1886,9 +1899,9 @@ rm(stage_m, stage_m_flex,
 
 # Q: How does male behaviour relate to mating and reproductive success?
 
-*Prediction 2* Increased time spent active (%) is associated with increased likelihood of mating success
-*Prediction 3* Males who spend more days at the site during the fertile period have a higher probability of mating success
-*Prediction 4* Males with higher mean ODBA have a higher probability of mating success.
+*Prediction* Increased time spent active (%) is associated with increased likelihood of mating success
+*Prediction* Males who spend more days at the site during the fertile period have a higher probability of mating success
+*Prediction* Males with higher mean ODBA have a higher probability of mating success.
 
 In the plots and analyses below, we only include data from the fertile stage, and only for males with at least `r min_acc_days` days of data during the fertile stage. 
 
@@ -1897,7 +1910,7 @@ However, it's a problem to exclude males with limited data for the tenure analys
 ```{r Adapt data for analyses}
 ind_activity <- ind_activity %>%
   mutate(prop_activity=total_perc_active/100,
-         recording_hours=n_samples*window_length/60,
+         recording_hours=n_windows*window_length/60,
          arrival_day=as.numeric(difftime(arrival_date, 
                                          local_date_to_posix("2022-06-01"),
                                          units="days")),
@@ -1941,15 +1954,15 @@ cor(ind_fertile_activity$tenure_days, ind_fertile_activity$arrival_day)
 
 Tenure is highly correlated with number of hours of data recorded, which makes sense. So we do not include both these variables in the model. Tenure is the more interesting and biologically meaningful variable, so we focus on that.
 
-Also note that mean ODBA during activity and proportion of time spent active are correlated.
+Also note that mean ODBA and proportion of time spent active are correlated.
 
 ```{r}
-cor.test(ind_fertile_activity$mean_ODBA_active, ind_fertile_activity$prop_activity)
+cor.test(ind_fertile_activity$mean_ODBA, ind_fertile_activity$prop_activity)
 ```
 
 ## Mating success (number of females with which a male sired offspring)
 
-### Fig: % active and mating success
+### Model: % active and mating success
 
 There are often concerns about models with Poisson distributions. We confirmed that all model assumptions were met and that there were no issues with overdispersion. Running the model with a Gaussian distribution violates model assumptions but still produces the same conclusions.
 
@@ -1993,6 +2006,8 @@ write.csv(m1_effects,
 
 ```
 
+### Fig: % active and mating success
+
 ```{r fig.width=3.6, fig.height=3.6}
 success_active_plot <- ggplot(ind_fertile_activity)+
   geom_line(data = m1_active_eff,
@@ -2025,7 +2040,7 @@ success_active_plot <- ggplot(ind_fertile_activity)+
 success_active_plot
 ```
 
-### Fig: Tenure and mating success
+### Model: Tenure and mating success
 
 ```{r Mating success and tenure model}
 success_mt <- glmmTMB(n_nests ~ scale(log(tenure_days_exact)) + scale(arrival_day),
@@ -2065,6 +2080,8 @@ write.csv(mt_effects,
           file=glue("{output_path}/tenure-mating-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
 
 ```
+
+### Fig: Tenure and mating success
 
 ```{r fig.width=3.6, fig.height=3.6}
 success_tenure_plot <- ggplot(ind_tenure)+
@@ -2116,10 +2133,10 @@ ind_fertile_activity %>%
   arrange(tenure_days_exact)
 ```
 
-### Fig: ODBA and mating success
+### Model: ODBA and mating success
 
 ```{r Mating success and odba model}
-success_m2 <- glmmTMB(n_nests ~ scale(mean_ODBA_active) + scale(log(tenure_days)) + scale(arrival_day),
+success_m2 <- glmmTMB(n_nests ~ scale(mean_ODBA) + scale(log(tenure_days)) + scale(arrival_day),
                    data=ind_fertile_activity,
                    # data=ind_fertile_activity %>% filter(likely_undetected_success=="no"),
                    family=poisson)
@@ -2145,19 +2162,21 @@ Similar effects are observed when males near predated nests are excluded.
 
 ```{r}
 m2_effects = effects::allEffects(success_m2, xlevels = 100)
-m2_active_eff = m2_effects$`scale(mean_ODBA_active)` %>% data.frame
+m2_active_eff = m2_effects$`scale(mean_ODBA)` %>% data.frame
 m2_tenure_eff = m2_effects$`scale(log(tenure_days))` %>% data.frame
 ```
+
+### Fig: ODBA and mating success
 
 ```{r fig.width=2, fig.height=2.4}
 success_odba_plot <- ggplot(ind_fertile_activity)+
   geom_line(data = m2_active_eff,
-            aes(y = fit, x = mean_ODBA_active),
+            aes(y = fit, x = mean_ODBA),
             colour=col_scale[1]) +
   geom_ribbon(data = m2_active_eff,
-              aes(y = fit, x = mean_ODBA_active, ymin = lower, ymax = upper),
+              aes(y = fit, x = mean_ODBA, ymin = lower, ymax = upper),
               alpha = 0.2, fill=col_scale[1])+
-  geom_jitter(aes(x=mean_ODBA_active, y=n_nests, shape=likely_extra_nests),
+  geom_jitter(aes(x=mean_ODBA, y=n_nests, shape=likely_extra_nests),
              fill=male_colour,
              colour=male_colour,
              size=point_size,
@@ -2165,10 +2184,10 @@ success_odba_plot <- ggplot(ind_fertile_activity)+
              width=0.005, height=0.04) +
   theme_classic()+
   scale_shape_manual(values=c(default_shape, default_shape), guide="none")+
-  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0.2,0.6,by=0.1))) +
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(0.1,0.5,by=0.1))) +
   scale_y_continuous(breaks=c(seq(0,2,by=1))) +
-  coord_cartesian(xlim=c(0.23,0.63), ylim=c(0,2.1))+
-  xlab("\n mean ODBA when active (g)") +
+  coord_cartesian(xlim=c(0.1,0.53), ylim=c(0,2.1))+
+  xlab("\n mean ODBA (g)") +
   ylab("mating success\n")+
   theme(legend.position="right",
         plot.margin=unit(c(0,0,0,0), 'lines'),
@@ -2187,7 +2206,7 @@ success_odba_plot
 *Prediction 6* Males with longer site tenure have higher reproductive success
 *Prediction 7* Males with longer site tenure have higher reproductive success
 
-### Fig: % active and reproductive success
+### Model: % active and reproductive success
 
 ```{r Reproductive success and activity model}
 success_m3 <- glmmTMB(n_eggs ~ scale(prop_activity) + scale(log(tenure_days)) + scale(arrival_day),
@@ -2226,6 +2245,8 @@ write.csv(m3_effects,
 
 ```
 
+### Fig: % active and reproductive success
+
 ```{r fig.width=2, fig.height=2.4}
 egg_active_plot <- ggplot(ind_fertile_activity)+
   geom_line(data = m3_active_eff,
@@ -2257,7 +2278,7 @@ egg_active_plot <- ggplot(ind_fertile_activity)+
 egg_active_plot
 ```
 
-### Fig: Tenure and reproductive success
+### Model: Tenure and reproductive success
 
 ```{r Reproductive success and tenure model}
 success_mt2 <- glmmTMB(n_eggs ~ scale(log(tenure_days_exact)) + scale(arrival_day),
@@ -2296,6 +2317,8 @@ write.csv(mt2_effects,
 
 ```
 
+### Fig: Tenure and reproductive success
+
 ```{r, fig.width=2, fig.height=2.4}
 egg_tenure_plot <- ggplot(ind_tenure) +
   geom_line(data = mt2_tenure_eff,
@@ -2327,7 +2350,7 @@ egg_tenure_plot <- ggplot(ind_tenure) +
 egg_tenure_plot
 ```
 
-### Fig: ODBA and reproductive success
+### Model: ODBA and reproductive success
 
 ```{r Reproductive success and odba model}
 success_m4 <- glmmTMB(n_eggs ~ scale(mean_ODBA) + scale(log(tenure_days)) + scale(arrival_day),
@@ -2357,9 +2380,7 @@ m4_active_eff = m4_effects$`scale(mean_ODBA)` %>% data.frame
 m4_tenure_eff = m4_effects$`scale(log(tenure_days))` %>% data.frame
 ```
 
-```{r}
-plot(m4_effects)
-```
+### Fig: ODBA and reproductive success
 
 ```{r fig.width=2, fig.height=2.4}
 egg_odba_plot <- ggplot(ind_fertile_activity)+
@@ -2396,8 +2417,8 @@ egg_odba_plot
 
 ```{r fig.height=2.5, fig.width=6.4}
 fig3 <- success_active_plot +
-  success_tenure_plot + ylab("\n") +
   success_odba_plot + ylab("\n") +
+  success_tenure_plot + ylab("\n") +
   plot_layout(nrow = 1,
               widths=c(1,1.05,1.05),
               heights=c(1))+
@@ -2426,8 +2447,8 @@ ggsave(plot=fig3,
 
 ```{r fig.height=2.5, fig.width=6.4}
 supfigsuccess <- egg_active_plot +
+    egg_odba_plot + ylab("\n") +
   egg_tenure_plot + ylab("\n") +
-  egg_odba_plot + ylab("\n") +
   plot_layout(nrow = 1,
               widths=c(1,1.05,1.05),
               heights=c(1))+
@@ -2453,15 +2474,34 @@ ggsave(plot=supfigsuccess,
 ```
 
 ```{r}
-rm(m1_active_eff, m1_active_eff2, m1_effects, m1_effects2, m1_tenure_eff,
-   m2_active_eff, m2_effects, m2_tenure_eff,
-   m3_active_eff, m3_effects, m3_tenure_eff, 
-   m4_active_eff, m4_effects, m4_tenure_eff,
-   success_m1, success_m1_flex, 
-   success_m2, success_m2_flex, 
-   success_m3, success_m3_flex,
-   success_m4, success_m4_flex,
-   success_mt, success_mt_flex)
+# rm(m1_active_eff, m1_active_eff2, m1_effects, m1_effects2, m1_tenure_eff,
+#    m2_active_eff, m2_effects, m2_tenure_eff,
+#    m3_active_eff, m3_effects, m3_tenure_eff, 
+#    m4_active_eff, m4_effects, m4_tenure_eff,
+#    success_m1, success_m1_flex, 
+#    success_m2, success_m2_flex, 
+#    success_m3, success_m3_flex,
+#    success_m4, success_m4_flex,
+#    success_mt, success_mt_flex)
+```
+
+# Q: How does activity interact with breeding phase to predict success?
+
+This doesn't really seem so interesting in the end.
+
+## Model: Male activity, breeding phase and success
+
+```{r}
+# act_stage_m <- glmmTMB(success_num ~ breeding_stage*prop_activity +
+#                          (breeding_stage|bird_ID),
+#                    data=ind_activity,
+#                    #data=daily_activity %>% filter(likely_undetected_success=="no"),
+#                    family=poisson)
+# summary(act_stage_m)
+# confint(act_stage_m, level=0.95)
+# 
+# simulationOutput <- simulateResiduals(act_stage_m)
+# testResiduals(simulationOutput)
 ```
 
 
@@ -2474,6 +2514,8 @@ But we do want to exclude nests that were depredated before genotyping.
 We adjust the dataset accordingly.
 
 Median daily distance from the nest site tended to be within 200 metres (in 14/18 cases).
+
+## Model: Activity relative to competitors
 
 ```{r Subset male and nest data for modelling}
 nest_male_date_sub <- nest_male_date %>%
@@ -2543,7 +2585,6 @@ nm_rel_effects <- cbind(name=rownames(nm_rel_effects),
          estimate=Estimate) %>%
   mutate(effect_type="rel")
 ```
-
 
 ```{r}
 if(save_tables==TRUE){
@@ -2620,16 +2661,140 @@ nest_male_boxplot <- ggplot() +
 nest_male_boxplot
 ```
 
+## Model: ODBA relative to competitors
+
+```{r Nest male model with scaled activity}
+nest_male_m2 <- glmmTMB(success ~ scale(z_ODBA) + 
+                         (1|bird_ID) +
+                         (1|nest),
+                       data = nest_male_date_sub,
+                       family = binomial())
+
+summary(nest_male_m2)
+
+simulationOutput <- simulateResiduals(fittedModel = nest_male_m2, plot=F)
+plot(simulationOutput)
+testZeroInflation(simulationOutput)
+testDispersion(simulationOutput)
+
+nm_rel_effects2 <- confint(nest_male_m2)
+nm_rel_effects2 <- cbind(name=rownames(nm_rel_effects2), 
+                        data.frame(nm_rel_effects2,
+                                   row.names=NULL)) %>%
+  rename(`2.5`=`X2.5..`,
+         `97.5`=`X97.5..`,
+         estimate=Estimate) %>%
+  mutate(effect_type="rel")
+```
+
+```{r}
+if(save_tables==TRUE){
+nest_m_flex <- as_flextable(nest_male_m2)
+save_as_docx(nest_m_flex, 
+             pr_section = sect_properties,
+             path = glue("{output_path}/scaled_nest_male_odba_model.docx"))
+}
+```
+
+## Fig: ODBA relative to competitors
+
+```{r}
+nest_male_boxplot2 <- ggplot() +
+  theme_classic()+
+    geom_point(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s0-point"),
+               aes(x = plot_factor,
+                   y = z_ODBA),
+             size=small.point.size,
+             alpha=point_alpha,
+             shape=default_shape,
+             fill=male_colour,
+             position=position_jitter(w=0.08, h=0, seed = 1),
+             ) +
+  geom_boxplot(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s0-box"),
+               aes(x = plot_factor,
+                   y = z_ODBA),
+               outlier.shape=default_shape,
+               fill="white",
+               width=0.7) +
+  geom_boxplot(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s1-box"),
+               aes(x = plot_factor,
+                   y = z_ODBA),
+               outlier.shape=default_shape,
+               fill="white",
+               width=0.7)+
+  geom_point(data = nest_male_plotdat %>% 
+                 filter(plot_factor == "s1-point"),
+               aes(x = plot_factor,
+                   y = z_ODBA),
+             size=small.point.size,
+             alpha=point_alpha,
+             shape=default_shape,
+             fill=male_colour,
+             position=position_jitter(w=0.08, h=0, seed = 1),
+             ) +
+  coord_cartesian(ylim=c(-2.8,2.8))+
+  scale_y_continuous(breaks=c(seq(-2,2,by=1)),
+                     expand=c(0,0))+
+  scale_x_discrete(breaks = c("s0-point", "s1-point"),
+                   labels = c("unsuccessful", "successful"))+
+  xlab("\n mating success")+
+  ylab("male ODBA\n (scaled relative to local males)\n")+
+  theme(text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        legend.title = element_text(size=legend.heading.size),
+        legend.text = element_text(size=label.size),
+        legend.position="right",
+        legend.justification="top",
+        legend.background = element_blank(),
+        legend.box.background = element_rect(colour = "grey"))
+
+nest_male_boxplot2
+```
+
+## Combined figure: Activity and ODBA relative to competitors
+
+```{r fig.height=2.5, fig.width=6.4}
+fig4 <- nest_male_boxplot +
+  plot_spacer() +
+  nest_male_boxplot2 +
+  plot_layout(nrow = 1,
+              widths=c(1,0.1,1),
+              heights=c(1))+
+  plot_annotation(tag_levels = 'a',
+                  tag_prefix = '(',
+                  tag_suffix = ')') &
+  theme(plot.tag = element_text(size=label.size, family = font.family, face="italic"),
+        plot.tag.position = c(.28, .96))
+
+fig4
+```
+
 ```{r}
 if(save_plots==TRUE){
-ggsave(plot=nest_male_boxplot,
+ggsave(plot=fig4,
        filename='figure4-relative-male-activity.jpg',
        path=output_path,
-       width=14,
+       width=16,
        height=7,
        units="cm",
        dpi=300)
 }
+```
+
+```{r}
+# if(save_plots==TRUE){
+# ggsave(plot=nest_male_boxplot,
+#        filename='figure4-relative-male-activity.jpg',
+#        path=output_path,
+#        width=14,
+#        height=7,
+#        units="cm",
+#        dpi=300)
+# }
 ```
 
 # Q: How repeatable is activity during the fertile period?
