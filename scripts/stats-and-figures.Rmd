@@ -942,6 +942,31 @@ daily_activity %>%
   flextable()
 ```
 
+```{r Variation in male ODBA}
+within_ind_var <- daily_activity %>%
+  ungroup() %>%
+  select(colour_combo, perc_active, mean_ODBA) %>%
+  group_by(colour_combo) %>%
+  summarise(min_perc_active=min(perc_active),
+            max_perc_active=max(perc_active),
+            diff_perc_active=max_perc_active-min_perc_active,
+            diff_hours_active=diff_perc_active*24/100,
+            diff_multiply_active=max_perc_active/min_perc_active,
+            mean_perc_active=mean(perc_active),
+            sd_perc_active=sd(perc_active),
+            min_ODBA=min(mean_ODBA),
+            max_ODBA=max(mean_ODBA),
+            diff_ODBA=max_ODBA-min_ODBA,
+            diff_multiply_ODBA=max_ODBA/min_ODBA,
+            mean_mean_ODBA=mean(mean_ODBA),
+            sd_ODBA=sd(mean_ODBA),
+            n_days=n()) %>%
+  arrange(diff_multiply_ODBA)
+
+within_ind_var %>% flextable()
+```
+
+
 ```{r Difference in activity between fertile and post-fertile phase}
 daily_activity %>%
   ungroup() %>%
@@ -953,6 +978,44 @@ daily_activity %>%
             se_perc_active=sd_perc_active/sqrt(n_samples)) %>%
   flextable()
 ```
+
+```{r Difference in ODBA between fertile and post-fertile phase}
+daily_activity %>%
+  ungroup() %>%
+  group_by(breeding_stage) %>%
+  summarise(min_mean_ODBA=min(mean_ODBA),
+            max_mean_ODBA=max(mean_ODBA),
+            mean_mean_ODBA=mean(mean_ODBA),
+            sd_mean_ODBA=sd(mean_ODBA),
+            n_samples=n(),
+            n_birds=n_distinct(bird_ID),
+            se_mean_ODBA=sd_mean_ODBA/sqrt(n_samples)) %>%
+  flextable()
+```
+
+```{r Within-individual differences between fertile and post-fertile phase}
+daily_activity %>%
+  ungroup() %>%
+  select(colour_combo, perc_active, mean_ODBA, breeding_stage) %>%
+  group_by(colour_combo, breeding_stage) %>%
+  summarise(mean_perc_active=mean(perc_active),
+            mean_ODBA=mean(mean_ODBA)) %>%
+  pivot_wider(values_from = c('mean_perc_active','mean_ODBA'),
+              names_from = 'breeding_stage') %>%
+  filter(!is.na(`mean_ODBA_post-fertile`) & !is.na(mean_perc_active_fertile)) %>%
+  mutate(diff_perc_active=mean_perc_active_fertile-`mean_perc_active_post-fertile`,
+         diff_hours_active=24/100*diff_perc_active,
+         diff_mean_ODBA=mean_ODBA_fertile-`mean_ODBA_post-fertile`) %>%
+  ungroup() %>%
+  summarise(mean_diff_perc_active=mean(diff_perc_active),
+            sd_diff_perc_active=sd(diff_perc_active),
+            mean_diff_hours_active=mean(diff_hours_active),
+            sd_diff_hours_active=sd(diff_hours_active),
+            mean_diff_ODBA=mean(diff_mean_ODBA),
+            sd_diff_ODBA=sd(diff_mean_ODBA)) %>%
+  flextable()
+```
+
 
 ```{r Difference in activity when min vs. max fertile females}
 daily_activity %>%
@@ -1008,7 +1071,9 @@ daily_activity %>%
   mutate(diff=ff_40-ff_0,
          diff_hours=24/100*diff) %>%
   ungroup() %>%
-  summarise(average_within_ind_diff_hours = mean(diff_hours)) %>%
+  summarise(average_within_ind_diff_hours = mean(diff_hours),
+            sd_within_ind_diff_hours = sd(diff_hours),
+            n=n()) %>%
   flextable()
 ```
 
@@ -2515,10 +2580,41 @@ We adjust the dataset accordingly.
 
 Median daily distance from the nest site tended to be within 200 metres (in 14/18 cases).
 
+The table below provides a summary of how many days each male who sired offspring was recorded, during the days when the female he mated with was fertile.
+
+```{r summary of nests and male dates}
+nest_male_summary <- nest_male_date %>%
+  mutate(dist_m=as.numeric(dist_m),
+         success=as.integer(success)) %>%
+  filter(success==1) %>%
+  select(nest, date, bird_ID, success, colour_combo) %>%
+  group_by(nest, bird_ID, success, colour_combo) %>%
+  summarise(n_days_father_recorded=n()) %>%
+  arrange(n_days_father_recorded) %>%
+  as.data.frame()
+
+nest_male_summary <- nest_dates %>%
+  group_by(nest) %>%
+  summarise(n_days_mother_fertile=n()) %>%
+  full_join(., nest_parentage, by='nest') %>%
+  filter(father1!="unbanded") %>%
+  full_join(., nest_male_summary, by='nest') %>%
+  select(nest, colour_combo, n_days_mother_fertile, n_days_father_recorded) %>%
+  mutate(father_unrecorded_days=n_days_mother_fertile-n_days_father_recorded) %>%
+  arrange(father_unrecorded_days)
+
+nest_male_summary %>% flextable()
+
+nest_male_summary %>%
+  summarise(mean_unrecorded_days=mean(father_unrecorded_days),
+            sd_unrecorded_days=sd(father_unrecorded_days))
+```
+
+
 ## Model: Activity relative to competitors
 
 ```{r Subset male and nest data for modelling}
-nest_male_date_sub <- nest_male_date %>%
+nest_male_date_sub2 <- nest_male_date %>%
   filter(!nest %in% predated_nests$nest) %>%
   mutate(dist_m=as.numeric(dist_m),
          success=as.integer(success)) %>%
