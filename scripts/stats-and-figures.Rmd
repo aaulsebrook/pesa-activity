@@ -58,7 +58,6 @@ library(ggalt) # for dumbbell charts
 library(data.table) # for fast table reading and rolling functions
 library(flextable) # generates neat tables
 library(officer) # formatting flextable for Microsoft Word
-#library(egg) # useful for combining plots (ggarrange)
 library(ggrepel) # for nicely spaced labels on plots
 library(fasttime) # for faster conversions to posixct
 library(wadeR)
@@ -76,7 +75,6 @@ library(lme4)
 library(spatialrisk) # for distances lat lon
 library(patchwork) # better than ggarrange for arranging figures
 library(DHARMa)
-#library(viridis)
 library(sf)
 library(future)
 library(broom.mixed) # for converting glmmtmb to flextable
