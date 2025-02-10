@@ -44,6 +44,7 @@ This project uses renv for R package management. Launch the .Rproj file, then si
 -   `scripts/` contains all code for analyses
 -   `data/` contains all basic data files required to reproduce the analyses
 -   `outputs/` contains model results, exploratory plots, and intermediate outputs
+-   `supplementary/` contains scripts, data, and summaries of preprocessing steps used for additional supplementary materials
 
 ## Dataset
 
@@ -75,4 +76,4 @@ The datafile `labelled-acc-data.csv` was generated through preparatory steps tha
 
 The analysis pipeline for the paper above is available here: https://github.com/rowanjh/behav-acc-ml/
 
-The datafiles and scripts associated with this prepatory analysis are also available upon request.
+The datafiles and scripts associated with this preparatory analysis are also available upon request.

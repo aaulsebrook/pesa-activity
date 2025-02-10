@@ -15,13 +15,13 @@ output:
 * Scaling factors (supplementary/supp-data/scaling_factors)
 * Scaled and unscaled ODBA datasets (supplementary/supp-data/scaled-and-unscaled-odba.data.csv) 
 
-*Outputs*: A figure for the manuscript in saved in "supplementary/supp-outputs/"
+*Outputs*: A figure for the manuscript is saved in "supplementary/supp-outputs/"
 
-Accelerometer accuracy can critically influence trends in accelerometer data (Garde et al., 2022). We used the 6-orientation ("6O") calibration method described by Garde et al. (2022) to assess accelerometer accuracy before data loggers were deployed. 
+Accelerometer accuracy can critically influence trends in accelerometer data (Garde et al. 2022). We used the 6-orientation ("6O") calibration method described by Garde et al. (2022) to assess accelerometer accuracy before data loggers were deployed. 
 
 Briefly, each data logger was held stationary in six different orientations, and a scaling or correction factor for each axis was determined by comparing raw accelerometry values with expected values. An R Markdown showing exactly how these values were calculated (*scaling_nano_6O-method.html*) is included in a supplementary folder ("supplementary/supp-preprocessing/").
 
-We were unable to apply a correction factor to data processed on board the device, so to test whether tag accuracy influenced inter-individual differences in mean ODBA, we compared corrected and uncorrected mean ODBA values based on the raw accelerometry data.
+We were unable to apply a correction factor to data processed on board the device. To test whether tag accuracy influenced inter-individual differences in mean ODBA, we therefore used the raw accelerometry data to compare the corrected and uncorrected mean ODBA values across individuals.
 
 ```{r Setup, include=FALSE} 
 knitr::opts_chunk$set(warning = FALSE, message = FALSE)
@@ -65,14 +65,17 @@ scaling_factors %>%
   flextable()
 ```
 
-In a separate script, these scaling factors were applied to each axis of the raw accelerometry data (i.e. raw_x * x_scaling_factor) before calculating mean ODBA at 10 minute intervals. We also repeated the same calculations but without applying the scaling factors. The resulting dataset is "scaled-and-unscaled-odba.data.csv".
+In a separate script ('window-odba.R', available upon request), the scaling factors above were applied to each axis of the raw accelerometry data (i.e. raw_x * x_scaling_factor) before calculating mean ODBA at 10 minute intervals. We also repeated the same calculations but without applying the scaling factors. The resulting dataset is "activity_ODBA_10min-intervals-raw.csv".
 
-*Note* The raw accelerometry data files are very large and only peripheral to this manuscript, so are not included with the data accompanying the manuscript. However, these are available upon request.
+*Note* The raw accelerometry data files are very large and only peripheral to this manuscript, so are not included with the data accompanying the manuscript. However, these data (stored in our database) and the script used to process these files ('window-odba.R') are available upon request.
 
-Below, we look at the correlation between scaled and unscaled ODBA values among individuals. This allows us to determine whether differences in ODBA due to scaling are likely to have influenced our results. 
+Below, we look at the correlation between scaled and unscaled ODBA values among individuals. This allows us to determine whether differences in ODBA due to scaling are likely to have influenced our results.
 
 ```{r Import scaled and unscaled odba data}
-odba <- read.csv(here("supplementary","supp-data","scaled-and-unscaled-odba-data.csv"))
+odba <- read.csv(here("supplementary","supp-data","activity_ODBA_10min-intervals-raw.csv"))
+
+odba <- odba %>%
+  rename(mean_unscaled_ODBA=mean_ODBA)
 ```
 
 ```{r Summarise mean values for each individual}
@@ -122,8 +125,6 @@ ggsave(plot=scaling_cor_plot,
        height=10,
        units="cm",
        dpi=300)
-
-getwd()
 ```
 
 The use of uncorrected ODBA values should have little to no effect on our results.

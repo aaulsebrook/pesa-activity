@@ -58,32 +58,28 @@ library(ggalt) # for dumbbell charts
 library(data.table) # for fast table reading and rolling functions
 library(flextable) # generates neat tables
 library(officer) # formatting flextable for Microsoft Word
-library(ggrepel) # for nicely spaced labels on plots
 library(fasttime) # for faster conversions to posixct
 library(wadeR)
-library(randomcoloR)
-library(ggsci)
 library(stringr) # count matches in string
 library(here) # for easier directory navigation
-library(glue)
+library(glue) # for easier naming and referring to directories
 library(dichromat) # for checking colours in figures
-library(emmeans)
-library(effects)
+library(emmeans) # for computing estimated marginal means (EMMs)
+library(effects) # for visualising effects
 library(glmmTMB) # for glmm with beta error distribution
 library(geosphere) # for distances lat lon
-library(lme4)
+library(lme4) # for mixed effects models
 library(spatialrisk) # for distances lat lon
 library(patchwork) # better than ggarrange for arranging figures
-library(DHARMa)
-library(sf)
-library(future)
+library(DHARMa) # for checking model assumptions
+library(sf) # for geometry functions
 library(broom.mixed) # for converting glmmtmb to flextable
 ```
 
 Some functions are used in multiple scripts and are therefore stored in their own script for easier access (general-helper-functions.R). This helper script needs to be loaded for the analyses below to run.
 
 ```{r Import general helper functions}
-source("./general-helper-functions.R")
+source("./scripts/general-helper-functions.R")
 ```
 
 Male activity was recorded using miniature accelerometers and received in two different ways: processed on board the device ("onboard" data) or stored in raw form ("rawbased" data). During the course of the study, we also considered different methods for processing the data. These included summarising the data at either 1-min or 10-min intervals, and either defining activity thresholds for each individual separately ("individual" thresholds) or together ("global" thresholds).
@@ -114,7 +110,7 @@ if(threshold_type=="global" & window_length!=10){
 }
 
 if(threshold_type=="global" & data_type!="onboard"){
-  print("Warning: We recommend using the 'onboard' data when applying the global threshold. The global threshold was developed using onboard processed on board the device.")
+  print("Warning: We recommend using the 'onboard' data when applying the global threshold. The global threshold was developed using data processed on board the device.")
 }
 
 if(window_length=="1" & data_type!="onboard"){
@@ -126,6 +122,17 @@ if(threshold_type == "global") {
 }
 ```
 
+```{r Define data location}
+# 10-min onboard activity data is used for the main analyses in the manuscript
+# all other data types are stored in a supplementary folder
+
+if(window_length==10 & data_type=="onboard") {
+  activity_data_path = here("outputs","processed-data")
+} else {
+  activity_data_path = here("supplementary", "supp-data")
+}
+```
+
 ```{r Import data}
 captures <- read.csv(here("data","capture-data.csv"))
 nests <- read.csv(here("data","nest-data.csv"))
@@ -134,11 +141,10 @@ parentage <- read.csv(here("data", "parentage-data.csv"))
 gps <- read.csv(here("data","gps-data.csv"))
 
 activity_onboard <- read.csv(here("outputs", "processed-data",
-                 glue("ODBA-and-activity_10min-intervals_onboard.csv")))
-  # this dataset is used to help determine final data transmission
+                                  "ODBA-and-activity_10min-intervals_onboard.csv"))
+  # this dataset is used to help determine when final data transmission occurred
 
-activity <- read.csv(here("outputs", "processed-data",
-                 glue("ODBA-and-activity_{window_length}min-intervals_{data_type}.csv")))
+activity <- read.csv(glue("{activity_data_path}/ODBA-and-activity_{window_length}min-intervals_{data_type}.csv"))
   # this dataset is the source of ODBA and activity data for analyses
   # there is the option to customise the input to analyse different activity datasets
 
@@ -146,7 +152,6 @@ male_trips_offsite <- read.csv(here("outputs", "processed-data", "male-trips-off
 ```
 
 All dates and times are local Alaskan times, unless specified otherwise. 
-
 ```{r Format dates and times in datasets}
 captures <- captures %>%
   mutate(date=local_date_to_posix(as.character(date)),
@@ -230,6 +235,7 @@ sect_properties <- prop_section(
 save_plots = TRUE
 save_tables = TRUE
 output_path <- here('outputs','figures-and-tables')
+output_supp_effects <- here('supplementary','supp-outputs','effect-sizes')
 
 if (!dir.exists(output_path)) {
   dir.create(output_path)
@@ -1659,7 +1665,7 @@ str(daily_activity$breeding_stage)
 str(daily_activity$bird_ID)
 ```
 
-```{r LME for breeding stage and percent male activity, width=10}
+```{r LME for breeding stage and percent male ODBA, width=10}
 odba_stage_m <- glmmTMB(mean_ODBA ~ breeding_stage + (breeding_stage|bird_ID),
                    data=daily_activity,
                    #data=daily_activity %>% filter(likely_undetected_success=="no"),
@@ -1702,7 +1708,7 @@ We also examine this trend in more detail, by looking at activity and the number
 
 ## Fig: Date and male ODBA
 
-```{r Male time spent active, fig.height=7,fig.width=6, message=FALSE}
+```{r Male ODBA, fig.height=7,fig.width=6, message=FALSE}
 boxplot_odba_date <- ggplot(daily_activity, aes(x=local_date,
                                                  y=mean_ODBA,
                                                  group=local_date))+
@@ -1751,7 +1757,7 @@ boxplot_odba_date <- ggplot(daily_activity, aes(x=local_date,
 boxplot_odba_date
 ```
 
-```{r Male time spent active and breeding stage, fig.height=4.5, fig.width=7, message=FALSE}
+```{r Male odba and breeding stage, fig.height=4.5, fig.width=7, message=FALSE}
 season_odba_plot <- boxplot_odba_date +
   hor_barplot_ff +
   plot_layout(
@@ -2065,7 +2071,7 @@ m1_active_eff2 = m1_effects2$`scale(prop_activity)` %>% data.frame
 m1_effects = as.data.frame(confint(success_m1, level=0.95))
 
 write.csv(m1_effects,
-          file=glue("{output_path}/activity-mating-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
+          file=glue("{output_supp_effects}/activity-mating-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
 
 ```
 
@@ -2134,14 +2140,6 @@ The effect of activity is similar when the males with territories around predate
 ```{r}
 mt_effects = effects::allEffects(success_mt, xlevels = 100)
 mt_tenure_eff = mt_effects$`scale(log(tenure_days_exact))` %>% data.frame
-```
-
-```{r Export effects of tenure on mating success}
-mt_effects = as.data.frame(confint(success_mt, level=0.95))
-
-write.csv(mt_effects,
-          file=glue("{output_path}/tenure-mating-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
-
 ```
 
 ### Fig: Tenure and mating success
@@ -2304,7 +2302,7 @@ m3_tenure_eff = m3_effects$`scale(log(tenure_days))` %>% data.frame
 m3_effects = as.data.frame(confint(success_m3, level=0.95))
 
 write.csv(m3_effects,
-          file=glue("{output_path}/activity-repr-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
+          file=glue("{output_supp_effects}/activity-repr-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
 
 ```
 
@@ -2370,14 +2368,6 @@ save_as_docx(success_mt2_flex,
 ```{r}
 mt2_effects = effects::allEffects(success_mt2, xlevels = 100)
 mt2_tenure_eff = mt2_effects$`scale(log(tenure_days_exact))` %>% data.frame
-```
-
-```{r Export effects of tenure on reproductive success}
-mt2_effects = as.data.frame(confint(success_mt2, level=0.95))
-
-write.csv(mt2_effects,
-          file=glue("{output_path}/tenure-reproduction-effects_{window_length}min_{data_type}-{threshold_type}thresh.csv"))
-
 ```
 
 ### Fig: Tenure and reproductive success
@@ -2537,36 +2527,16 @@ ggsave(plot=supfigsuccess,
 ```
 
 ```{r}
-# rm(m1_active_eff, m1_active_eff2, m1_effects, m1_effects2, m1_tenure_eff,
-#    m2_active_eff, m2_effects, m2_tenure_eff,
-#    m3_active_eff, m3_effects, m3_tenure_eff, 
-#    m4_active_eff, m4_effects, m4_tenure_eff,
-#    success_m1, success_m1_flex, 
-#    success_m2, success_m2_flex, 
-#    success_m3, success_m3_flex,
-#    success_m4, success_m4_flex,
-#    success_mt, success_mt_flex)
+rm(m1_active_eff, m1_active_eff2, m1_effects, m1_effects2, m1_tenure_eff,
+   m2_active_eff, m2_effects, m2_tenure_eff,
+   m3_active_eff, m3_effects, m3_tenure_eff,
+   m4_active_eff, m4_effects, m4_tenure_eff,
+   success_m1, success_m1_flex,
+   success_m2, success_m2_flex,
+   success_m3, success_m3_flex,
+   success_m4, success_m4_flex,
+   success_mt, success_mt_flex)
 ```
-
-# Q: How does activity interact with breeding phase to predict success?
-
-This doesn't really seem so interesting in the end.
-
-## Model: Male activity, breeding phase and success
-
-```{r}
-# act_stage_m <- glmmTMB(success_num ~ breeding_stage*prop_activity +
-#                          (breeding_stage|bird_ID),
-#                    data=ind_activity,
-#                    #data=daily_activity %>% filter(likely_undetected_success=="no"),
-#                    family=poisson)
-# summary(act_stage_m)
-# confint(act_stage_m, level=0.95)
-# 
-# simulationOutput <- simulateResiduals(act_stage_m)
-# testResiduals(simulationOutput)
-```
-
 
 # Q: Does activity relative to rivals predict success at a given nest?
 
@@ -2612,7 +2582,7 @@ nest_male_summary %>%
 ## Model: Activity relative to competitors
 
 ```{r Subset male and nest data for modelling}
-nest_male_date_sub2 <- nest_male_date %>%
+nest_male_date_sub <- nest_male_date %>%
   filter(!nest %in% predated_nests$nest) %>%
   mutate(dist_m=as.numeric(dist_m),
          success=as.integer(success)) %>%
@@ -2757,7 +2727,7 @@ nest_male_boxplot
 
 ## Model: ODBA relative to competitors
 
-```{r Nest male model with scaled activity}
+```{r Nest male model with scaled odba}
 nest_male_m2 <- glmmTMB(success ~ scale(z_ODBA) + 
                          (1|bird_ID) +
                          (1|nest),
@@ -2877,18 +2847,6 @@ ggsave(plot=fig4,
        units="cm",
        dpi=300)
 }
-```
-
-```{r}
-# if(save_plots==TRUE){
-# ggsave(plot=nest_male_boxplot,
-#        filename='figure4-relative-male-activity.jpg',
-#        path=output_path,
-#        width=14,
-#        height=7,
-#        units="cm",
-#        dpi=300)
-# }
 ```
 
 # Q: How repeatable is activity during the fertile period?

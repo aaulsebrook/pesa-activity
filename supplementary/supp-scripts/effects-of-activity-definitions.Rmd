@@ -1,0 +1,240 @@
+---
+title: "Pectoral sandpipers: effects of different thresholds and window lengths"
+output: html_notebook
+---
+
+```{r Load packages}
+library(here)
+library(glue)
+library(patchwork)
+```
+
+```{r Set up workspace}
+input_path <- here("supplementary", "supp-outputs", "effect-sizes") 
+output_path <- here("supplementary", "supp-outputs") 
+
+male_colour = "darkgreen"
+female_colour = "gray32" 
+success_colour = "#2267E7"  #"#20EAABFF"
+fail_colour = "#DF536B"
+default_shape = 21
+uncertain_shape = 4
+
+legend.heading.size = 10
+axis.heading.size = 10
+label.size = 10
+font.family = "Calibri"
+small.point.size = 1
+```
+
+# Mating success
+
+```{r Import and combine mating effect tables}
+druid <- read.csv(glue("{input_path}/activity-mating-effects_10min_onboard-individualthresh.csv")) %>%
+  mutate(data_type="druid",
+         threshold_type="individual",
+         window_length=10,
+         combined_type="druid10ind")
+druidglobal <- read.csv(glue("{input_path}/activity-mating-effects_10min_onboard-globalthresh.csv")) %>%
+  mutate(data_type="druid",
+         threshold_type="global",
+         window_length=10,
+         combined_type="druid10glob")
+raw10 <- read.csv(glue("{input_path}/activity-mating-effects_10min_rawbased-individualthresh.csv")) %>%
+  mutate(data_type="raw",
+         threshold_type="individual",
+         window_length=10,
+         combined_type="raw10ind")
+raw1 <- read.csv(glue("{input_path}/activity-mating-effects_1min_rawbased-individualthresh.csv")) %>%
+  mutate(data_type="raw",
+         threshold_type="individual",
+         window_length=1,
+         combined_type="raw1ind")
+
+mating_effects <- bind_rows(druid, druidglobal, raw10, raw1) %>%
+  rename(var = "X",
+         "2.5"="X2.5..",
+         "97.5"="X97.5..",
+         estimate=Estimate) %>%
+  filter(var=="scale(prop_activity)") %>%
+  mutate(type_level = case_when(combined_type=="raw1ind" ~ 1,
+                                combined_type=="raw10ind" ~ 2,
+                                combined_type=="druid10glob" ~ 1,
+                                combined_type=="druid10ind" ~ 2))
+```
+
+```{r mating effect plot}
+mating_effects$combined_type <- factor(mating_effects$combined_type, 
+                                 levels = c("raw1ind",
+                                            "raw10ind",
+                                            "druid10glob",
+                                            "druid10ind"))
+
+fig_mating_threshold <- ggplot(data=mating_effects %>% filter(data_type=="druid")) +
+  theme_classic() +
+  geom_linerange(aes(xmin=`2.5`, xmax=`97.5`, y=threshold_type),
+                 colour="gray30") +
+  geom_point(aes(x=estimate, y=threshold_type), 
+             size=small.point.size+2, 
+             shape=default_shape,
+             colour="gray30",
+             fill=male_colour) +
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(-0.8,2.6,by=0.4))) +
+  coord_cartesian(xlim=c(-0.4,1.8))+
+  xlab("\n standardised effect size\n (95% confidence interval)") +
+  ylab("Threshold type\n")+
+  ggtitle("Mating success") +
+  theme(plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        plot.title = element_text(size=axis.heading.size+2, hjust=0.5),
+        strip.background = element_blank(),
+        axis.line.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        strip.text.x = element_blank()) +
+  geom_vline(xintercept=0, colour="black")
+
+fig_mating_window <- ggplot(data=mating_effects %>% filter(data_type=="raw")) +
+  theme_classic() +
+  geom_linerange(aes(xmin=`2.5`, xmax=`97.5`, y=as.factor(window_length)),
+                 colour="gray30") +
+  geom_point(aes(x=estimate, y=as.factor(window_length)), 
+             size=small.point.size+2, 
+             shape=default_shape,
+             colour="gray30",
+             fill=male_colour) +
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(-0.8,2.6,by=0.4))) +
+  coord_cartesian(xlim=c(-0.4,1.8))+
+  xlab("\n standardised effect size\n (95% confidence interval)") +
+  ylab("Window length\n")+
+  #ggtitle("Mating success") +
+  theme(plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        plot.title = element_text(size=axis.heading.size+2, hjust=0.5),
+        strip.background = element_blank(),
+        axis.line.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        strip.text.x = element_blank()) +
+  geom_vline(xintercept=0, colour="black")
+
+fig_mating_threshold + fig_mating_window
+```
+
+# Reproductive success
+
+```{r Import and combine reproductive effect tables}
+druid <- read.csv(glue("{input_path}/activity-repr-effects_10min_onboard-individualthresh.csv")) %>%
+  mutate(data_type="druid",
+         threshold_type="individual",
+         window_length=10,
+         combined_type="druid10ind")
+druidglobal <- read.csv(glue("{input_path}/activity-repr-effects_10min_onboard-globalthresh.csv")) %>%
+  mutate(data_type="druid",
+         threshold_type="global",
+         window_length=10,
+         combined_type="druid10glob")
+raw10 <- read.csv(glue("{input_path}/activity-repr-effects_10min_rawbased-individualthresh.csv")) %>%
+  mutate(data_type="raw",
+         threshold_type="individual",
+         window_length=10,
+         combined_type="raw10ind")
+raw1 <- read.csv(glue("{input_path}/activity-repr-effects_1min_rawbased-individualthresh.csv")) %>%
+  mutate(data_type="raw",
+         threshold_type="individual",
+         window_length=1,
+         combined_type="raw1ind")
+
+repr_effects <- bind_rows(druid, druidglobal, raw10, raw1) %>%
+  rename(var = "X",
+         "2.5"="X2.5..",
+         "97.5"="X97.5..",
+         estimate=Estimate) %>%
+  filter(var=="scale(prop_activity)") %>%
+  mutate(type_level = case_when(combined_type=="raw1ind" ~ 1,
+                                combined_type=="raw10ind" ~ 2,
+                                combined_type=="druid10glob" ~ 1,
+                                combined_type=="druid10ind" ~ 2))
+```
+
+```{r reproductive effect plot}
+repr_effects$combined_type <- factor(repr_effects$combined_type, 
+                                 levels = c("raw1ind",
+                                            "raw10ind",
+                                            "druid10glob",
+                                            "druid10ind"))
+
+fig_repr_threshold <- ggplot(data=repr_effects %>% filter(data_type=="druid")) +
+  theme_classic() +
+  geom_linerange(aes(xmin=`2.5`, xmax=`97.5`, y=threshold_type),
+                 colour="gray30") +
+  geom_point(aes(x=estimate, y=threshold_type), 
+             size=small.point.size+2, 
+             shape=default_shape,
+             colour="gray30",
+             fill=male_colour) +
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(-0.8,2.6,by=0.4))) +
+  coord_cartesian(xlim=c(-0.4,1.8))+
+  xlab("\n standardised effect size\n (95% confidence interval)") +
+  ylab("Threshold type\n")+
+  ggtitle("Reproductive success") +
+  theme(plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        plot.title = element_text(size=axis.heading.size+2, hjust=0.5),
+        strip.background = element_blank(),
+        axis.line.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        strip.text.x = element_blank()) +
+  geom_vline(xintercept=0, colour="black")
+
+fig_repr_window <- ggplot(data=repr_effects %>% filter(data_type=="raw")) +
+  theme_classic() +
+  geom_linerange(aes(xmin=`2.5`, xmax=`97.5`, y=as.factor(window_length)),
+                 colour="gray30") +
+  geom_point(aes(x=estimate, y=as.factor(window_length)), 
+             size=small.point.size+2, 
+             shape=default_shape,
+             colour="gray30",
+             fill=male_colour) +
+  scale_x_continuous(expand = c(0, 0), breaks=c(seq(-0.8,2.6,by=0.4))) +
+  coord_cartesian(xlim=c(-0.4,1.8))+
+  xlab("\n standardised effect size\n (95% confidence interval)") +
+  ylab("Window length\n")+
+  #ggtitle("repr success") +
+  theme(plot.margin=unit(c(0,0,0,0), 'lines'),
+        text=element_text(family=font.family),
+        axis.title = element_text(size=axis.heading.size),
+        axis.text = element_text(size=label.size),
+        plot.title = element_text(size=axis.heading.size+2, hjust=0.5),
+        strip.background = element_blank(),
+        axis.line.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        strip.text.x = element_blank()) +
+  geom_vline(xintercept=0, colour="black")
+```
+
+# Combined plot
+
+```{r fig.width = 6.4, fig.height = 5.6}
+fig_activity_effect <- fig_mating_threshold + xlab("\n") + 
+  fig_repr_threshold + ylab("\n") + theme(axis.text.y=element_blank()) + xlab("\n") +
+    fig_mating_window + 
+  fig_repr_window + ylab("\n") + theme(axis.text.y=element_blank())
+
+fig_activity_effect
+```
+
+```{r}
+ggsave(plot=fig_activity_effect,
+       filename='figure-sup-activity-effect.jpg',
+       path=output_path,
+       width=16,
+       height=14,
+       units="cm",
+       dpi=300)
+```
+
